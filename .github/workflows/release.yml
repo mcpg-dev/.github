@@ -77,6 +77,7 @@ jobs:
       version: ${{ steps.m.outputs.version }}
       tag: ${{ steps.m.outputs.tag }}
       publish: ${{ steps.m.outputs.publish }}
+      wasm: ${{ steps.m.outputs.wasm }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - id: m
@@ -94,6 +95,14 @@ jobs:
           echo "version=${version}"  >> "$GITHUB_OUTPUT"
           echo "tag=${tag}"          >> "$GITHUB_OUTPUT"
           echo "publish=${{ vars.OSS_RELEASES_PUBLISH == 'true' }}" >> "$GITHUB_OUTPUT"
+          # WASI plugins have no public artifact lane: their zips job skips
+          # entirely so the Release (record + transparency assets) still
+          # completes rather than failing the repository.
+          wasm=false
+          if [ -f plugin.yaml ] && grep -qE '^runtime:[[:space:]]*wasm' plugin.yaml; then
+            wasm=true
+          fi
+          echo "wasm=${wasm}" >> "$GITHUB_OUTPUT"
 
   # ── verify: the crate builds, tests, and packages standalone (all tiers) ──
   # There is no registry publish: the release tag is what consumers
@@ -111,12 +120,22 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: cargo-lock
+      - name: System build dependencies
+        # Some crates' build graphs need system tooling the runner image
+        # lacks: protoc (proto-compiling dependencies) and the MIT Kerberos
+        # headers (libgssapi-sys). Cheap enough to install everywhere.
+        run: |
+          sudo apt-get install -y -qq protobuf-compiler libkrb5-dev \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler libkrb5-dev; }
       - name: Build + test
+        # --all-targets: dev-dependency features join the resolve, which some
+        # libraries require by convention (k8s-openapi-style version features
+        # live in dev-dependencies; the consumer picks one).
         run: |
           set -euo pipefail
           # Same dependency set as every other lane, so a green check here means
           # the tag consumers reference resolves the way the artifacts were built.
-          cargo build --locked
+          cargo build --locked --all-targets
           cargo test --locked
       - name: Manifest hygiene
         # `cargo package` cannot apply here: packaging strips git references
@@ -298,6 +317,16 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           key: ${{ matrix.triple }}
+      - name: System build dependencies
+        # protoc + Kerberos headers for crates whose build graphs need them;
+        # per-OS, best-effort on the best-effort lanes.
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y -qq protobuf-compiler libkrb5-dev \
+              || { sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler libkrb5-dev; }
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            brew install protobuf krb5 || true
+          fi
       - name: musl cross toolchain (dynamic linking — the gateway dlopens plugins)
         if: matrix.musl
         run: |
@@ -398,7 +427,7 @@ jobs:
 
   # ── plugin cdylibs: packed via mcpg-plugin, signed, attached ─────────
   plugin-artifacts:
-    if: inputs.tier == 'plugin' && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true'
+    if: inputs.tier == 'plugin' && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true' && needs.meta.outputs.wasm != 'true'
     needs: [meta, verify, github-release, lockfile]
     strategy:
       fail-fast: false
@@ -440,6 +469,16 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           key: ${{ matrix.triple }}
+      - name: System build dependencies
+        # protoc + Kerberos headers for crates whose build graphs need them;
+        # per-OS, best-effort on the best-effort lanes.
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y -qq protobuf-compiler libkrb5-dev \
+              || { sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler libkrb5-dev; }
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            brew install protobuf krb5 || true
+          fi
       - name: musl cross toolchain
         if: matrix.musl
         run: |

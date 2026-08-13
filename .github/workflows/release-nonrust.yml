@@ -43,9 +43,19 @@ jobs:
           TIER: ${{ inputs.tier }}
         run: |
           set -euo pipefail
-          # The charts repo is not tag-driven, so GITHUB_REF_NAME is a branch
-          # there and these two outputs go unused by that lane.
-          tag="${GITHUB_REF_NAME}"
+          # Tag-push runs carry the version in the ref; a manual dispatch
+          # runs on a branch, so the version comes from the tree itself —
+          # package.json for npm, the VERSION file for go/hcl. The charts
+          # repo is not tag-driven and these outputs go unused by its lane.
+          case "$GITHUB_REF" in
+            refs/tags/*) tag="${GITHUB_REF_NAME}" ;;
+            *)
+              case "$TIER" in
+                npm) tag="v$(jq -r .version package.json)" ;;
+                go|hcl) tag="v$(tr -d '[:space:]' < VERSION)" ;;
+                *) tag="${GITHUB_REF_NAME}" ;;
+              esac ;;
+          esac
           version="${tag#v}"
           case "$TIER" in
             npm) name=$(jq -r .name package.json) ;;
