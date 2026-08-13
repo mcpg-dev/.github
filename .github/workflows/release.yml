@@ -60,10 +60,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # System git for dependency fetches so the pre-publication credential
-  # configuration applies; harmless when fetches are anonymous.
+  # System git for dependency fetches; sibling repositories are public, so
+  # the fetches are anonymous.
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  SIBLING_FETCH_TOKEN: ${{ secrets.OSS_SIBLING_FETCH_TOKEN }}
 
 jobs:
   # ── resolve name/version/tag once; decide gating ─────────────────────
@@ -80,14 +79,6 @@ jobs:
       publish: ${{ steps.m.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Dependency access (pre-publication)
-        # Sibling crates are consumed by git reference; before publication
-        # those repositories are not world-readable, so a provided token
-        # authenticates the fetches. Absent (the published state), fetches
-        # are anonymous and this step does nothing.
-        if: env.SIBLING_FETCH_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${{ github.repository_owner }}/".insteadOf "https://github.com/${{ github.repository_owner }}/"
       - id: m
         run: |
           set -euo pipefail
@@ -113,14 +104,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Dependency access (pre-publication)
-        # Sibling crates are consumed by git reference; before publication
-        # those repositories are not world-readable, so a provided token
-        # authenticates the fetches. Absent (the published state), fetches
-        # are anonymous and this step does nothing.
-        if: env.SIBLING_FETCH_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${{ github.repository_owner }}/".insteadOf "https://github.com/${{ github.repository_owner }}/"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4  # stable
         with:
           toolchain: stable
@@ -265,14 +248,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Dependency access (pre-publication)
-        # Sibling crates are consumed by git reference; before publication
-        # those repositories are not world-readable, so a provided token
-        # authenticates the fetches. Absent (the published state), fetches
-        # are anonymous and this step does nothing.
-        if: env.SIBLING_FETCH_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${{ github.repository_owner }}/".insteadOf "https://github.com/${{ github.repository_owner }}/"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4  # stable
         with:
           toolchain: stable
@@ -312,14 +287,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Dependency access (pre-publication)
-        # Sibling crates are consumed by git reference; before publication
-        # those repositories are not world-readable, so a provided token
-        # authenticates the fetches. Absent (the published state), fetches
-        # are anonymous and this step does nothing.
-        if: env.SIBLING_FETCH_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${{ github.repository_owner }}/".insteadOf "https://github.com/${{ github.repository_owner }}/"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4  # stable
         with:
           toolchain: stable
@@ -448,14 +415,6 @@ jobs:
     continue-on-error: ${{ matrix.required != true }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Dependency access (pre-publication)
-        # Sibling crates are consumed by git reference; before publication
-        # those repositories are not world-readable, so a provided token
-        # authenticates the fetches. Absent (the published state), fetches
-        # are anonymous and this step does nothing.
-        if: env.SIBLING_FETCH_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${{ github.repository_owner }}/".insteadOf "https://github.com/${{ github.repository_owner }}/"
       # There is no WASI lane here yet (the private CD has
       # publish-wasm-plugin.sh; this workflow has no equivalent). A wasm plugin
       # is still typed `plugin` by repo-meta.mjs, so without this it would
@@ -591,14 +550,6 @@ jobs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Dependency access (pre-publication)
-        # Sibling crates are consumed by git reference; before publication
-        # those repositories are not world-readable, so a provided token
-        # authenticates the fetches. Absent (the published state), fetches
-        # are anonymous and this step does nothing.
-        if: env.SIBLING_FETCH_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${{ github.repository_owner }}/".insteadOf "https://github.com/${{ github.repository_owner }}/"
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
@@ -631,14 +582,6 @@ jobs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Dependency access (pre-publication)
-        # Sibling crates are consumed by git reference; before publication
-        # those repositories are not world-readable, so a provided token
-        # authenticates the fetches. Absent (the published state), fetches
-        # are anonymous and this step does nothing.
-        if: env.SIBLING_FETCH_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${{ github.repository_owner }}/".insteadOf "https://github.com/${{ github.repository_owner }}/"
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
@@ -705,14 +648,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Dependency access (pre-publication)
-        # Sibling crates are consumed by git reference; before publication
-        # those repositories are not world-readable, so a provided token
-        # authenticates the fetches. Absent (the published state), fetches
-        # are anonymous and this step does nothing.
-        if: env.SIBLING_FETCH_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${{ github.repository_owner }}/".insteadOf "https://github.com/${{ github.repository_owner }}/"
         with:
           # The baseline is the PREVIOUS release tag of this repo (crates are
           # git-referenced, so the repo's own tags are the publish history) —
@@ -781,14 +716,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Dependency access (pre-publication)
-        # Sibling crates are consumed by git reference; before publication
-        # those repositories are not world-readable, so a provided token
-        # authenticates the fetches. Absent (the published state), fetches
-        # are anonymous and this step does nothing.
-        if: env.SIBLING_FETCH_TOKEN != ''
-        run: |
-          git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${{ github.repository_owner }}/".insteadOf "https://github.com/${{ github.repository_owner }}/"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4  # stable
         with:
           toolchain: stable
