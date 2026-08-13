@@ -192,11 +192,15 @@ jobs:
         run: |
           set -euo pipefail
           # Any-state lookup: a draft from an earlier attempt exists only in
-          # the paginated list, never behind the by-tag endpoint.
+          # the paginated list, never behind the by-tag endpoint. On an HTTP
+          # error gh prints the raw response body to stdout with the jq
+          # filter unapplied, so only a purely numeric capture counts.
           id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .id 2>/dev/null || true)
+          case "$id" in ''|*[!0-9]*) id="" ;; esac
           if [ -z "$id" ]; then
             id=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
               --jq "[.[] | select(.tag_name == \"${TAG}\")][0].id // empty" 2>/dev/null || true)
+            case "$id" in ''|*[!0-9]*) id="" ;; esac
           fi
           if [ -z "$id" ]; then
             id=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases" \
