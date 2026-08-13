@@ -1,8 +1,8 @@
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  OSS RELEASE — shared reusable workflow for every mcpg-dev public repo   ║
 # ╠══════════════════════════════════════════════════════════════════════════╣
-# ║  Called by the tiny per-repo release.yml shim (seeded by                 ║
-# ║  bootstrap-repo.sh) on the mirror-pushed `v{version}` tag. Tiers:        ║
+# ║  Called by the tiny per-repo release.yml shim on the `v{version}`        ║
+# ║  release tag. Tiers:                                                     ║
 # ║                                                                          ║
 # ║    lib      GitHub Release + transparency assets (lock/SBOM/API diff)   ║
 # ║    plugin   + 6-lane cdylib build → signed zips as release assets        ║
@@ -11,21 +11,20 @@
 # ║             image when the repo carries a Dockerfile)                    ║
 # ║                                                                          ║
 # ║  Crates are consumed by GIT REFERENCE (git + tag in the manifest), not   ║
-# ║  crates.io — the mirror-pushed tag IS the publish. This workflow cuts    ║
-# ║  the Release record and artifacts around it.                             ║
+# ║  crates.io — the release tag IS the publish. This workflow cuts the      ║
+# ║  Release record and artifacts around it.                                 ║
 # ║                                                                          ║
 # ║  CONSENT GATES (org variables) — each phase ungated separately:          ║
 # ║    OSS_CI_ENABLED       run anything at all (unset ⇒ instant skip)       ║
 # ║    OSS_RELEASES_PUBLISH cut real GitHub Releases (else verify-only)      ║
 # ║    OSS_ARTIFACTS_PUBLISH binaries/zips/images (products+plugins)         ║
-# ║  Plus the tag itself: the private-monorepo mirror pushes it manually.    ║
+# ║  Plus the tag itself, which the release pipeline pushes deliberately.    ║
 # ║                                                                          ║
-# ║  No Cargo.lock travels in the mirror, so one `lockfile` job resolves     ║
+# ║  No Cargo.lock ships with the source, so one `lockfile` job resolves     ║
 # ║  once and every lane builds `--locked` against that artifact — the       ║
-# ║  same file attached to the Release. Builds are default-features          ║
-# ║  (proprietary-gated features are stripped from the public manifest):     ║
-# ║  public artifacts are the community edition. The private monorepo CD     ║
-# ║  remains the enterprise artifact channel.                                ║
+# ║  same file attached to the Release. Builds are default-features:         ║
+# ║  public artifacts are the community edition; enterprise artifacts        ║
+# ║  ship through their own channel.                                         ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 name: OSS Release
@@ -65,8 +64,8 @@ env:
 jobs:
   # ── resolve name/version/tag once; decide gating ─────────────────────
   # Master CI switch: with OSS_CI_ENABLED unset, meta skips and every
-  # downstream job cascade-skips — mirror pushes during the private
-  # trial execute nothing.
+  # downstream job cascade-skips — pushes during the private trial
+  # execute nothing.
   meta:
     if: vars.OSS_CI_ENABLED == 'true'
     runs-on: ubuntu-latest
@@ -94,7 +93,7 @@ jobs:
           echo "publish=${{ vars.OSS_RELEASES_PUBLISH == 'true' }}" >> "$GITHUB_OUTPUT"
 
   # ── verify: the crate builds, tests, and packages standalone (all tiers) ──
-  # There is no registry publish: the mirror-pushed tag is what consumers
+  # There is no registry publish: the release tag is what consumers
   # reference (`{ git = "…", tag = "v…" }`), so this job is the release's
   # correctness gate — and the entire run when Releases are still gated off.
   verify:
@@ -118,16 +117,18 @@ jobs:
           cargo test --locked
       - name: Package (manifest hygiene)
         # --no-verify: the verify build resolves dependencies registry-only,
-        # and internal deps live on git mirrors, not crates.io. Packaging
+        # and sibling deps are git references, not crates.io. Packaging
         # still validates the manifest and would be the input to any future
         # registry publish (the version reqs are already exact).
-        run: cargo package --no-verify
+        # --allow-dirty: the downloaded lockfile artifact and build output are
+        # the only working-tree deltas on a CI checkout.
+        run: cargo package --no-verify --allow-dirty
 
   # ── GitHub Release shell (all tiers; artifact jobs attach into it) ───
   github-release:
     # A Release is a published artefact, so the rehearsal phase
     # (OSS_RELEASES_PUBLISH unset ⇒ verify-only) must not cut real
-    # Releases on every mirror push.
+    # Releases on every push.
     #
     # Created as a DRAFT — invisible, no notification — and flipped public by
     # the finalize job once every asset lane has run, so watchers get one
@@ -144,8 +145,8 @@ jobs:
       - name: Write the release body
         run: |
           cat > "$RUNNER_TEMP/body.md" <<'BODY'
-          One-way mirror release of `${{ needs.meta.outputs.crate }}` at `${{ needs.meta.outputs.tag }}`.
-          Source of truth is the mcpg monorepo; issues welcome here, pull requests cannot be merged into a mirror.
+          Release of `${{ needs.meta.outputs.crate }}` at `${{ needs.meta.outputs.tag }}`.
+          Issues are welcome; pull requests cannot be merged here — development happens upstream.
 
           This crate is consumed by **git reference** — it is not published to crates.io:
 
@@ -167,7 +168,7 @@ jobs:
           lockfile, so it describes these binaries rather than a later resolution — to rebuild this version
           byte-for-byte, drop it in as `Cargo.lock` and build `--locked`.
           Library and plugin releases also carry a `cargo-public-api` diff of the public Rust surface against the
-          previous release tag — this mirror does not ship a changelog, and that diff is the machine-checkable
+          previous release tag — these releases do not ship a changelog, and that diff is the machine-checkable
           answer to what changed.
 
           **macOS:** the `aarch64-apple-darwin` binaries are signed by cosign but are **not** Apple-codesigned or
@@ -183,7 +184,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
-          # Mirror tags carry the version verbatim, so any `-` means
+          # Release tags carry the version verbatim, so any `-` means
           # prerelease — beta/alpha releases must be flagged as such.
           PRE: ${{ contains(needs.meta.outputs.version, '-') }}
         run: |
@@ -214,8 +215,8 @@ jobs:
     # one failed or was skipped (`!cancelled()`): a red lane must not keep
     # the release hidden — it publishes with whatever attached, exactly as a
     # release created live used to behave. "Latest" is taken here for
-    # non-prereleases: each mirror is one project, so the per-repo badge is
-    # meaningful for every repo (unlike the monorepo's single flagship badge).
+    # non-prereleases: each repository is one project, so the per-repo
+    # badge is meaningful for every repo.
     if: ${{ !cancelled() && needs.meta.result == 'success' && needs.meta.outputs.publish == 'true' && needs.github-release.result == 'success' }}
     needs: [meta, github-release, binaries, plugin-artifacts, image-manifest, public-api-diff, sbom]
     runs-on: ubuntu-latest
@@ -231,15 +232,15 @@ jobs:
             -F draft=false -f make_latest="$LATEST" --jq .html_url
 
   # ── one dependency set for the whole release ────────────────────────────────
-  # The monorepo lockfile lives at its root, outside every crate subtree, so it
-  # does not travel and a public build resolves dependencies itself. That is
-  # fine, but it must happen ONCE: resolving separately per lane produced six
-  # binaries that could each have a different dependency graph, and a "resolved
-  # lockfile" published from a seventh job that described none of them.
+  # No lockfile ships with the source, so a public build resolves dependencies
+  # itself. That is fine, but it must happen ONCE: resolving separately per
+  # lane produced six binaries that could each have a different dependency
+  # graph, and a "resolved lockfile" published from a seventh job that
+  # described none of them.
   #
-  # A lockfile committed in the mirror repo wins — it is excluded from the
-  # mirror's destination files precisely so it survives syncs — which is how a
-  # tag becomes reproducible rather than merely self-consistent.
+  # A lockfile committed in this repository wins — the release pipeline never
+  # overwrites it — which is how a tag becomes reproducible rather than merely
+  # self-consistent.
   lockfile:
     needs: meta
     runs-on: ubuntu-latest
@@ -461,14 +462,14 @@ jobs:
           echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
       - name: Build cdylib
         run: cargo build --release --locked --lib --target ${{ matrix.triple }}
-      - name: Install mcpg-plugin CLI (from its public mirror)
+      - name: Install mcpg-plugin CLI (from its repository)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Newest release tag of the CLI's own mirror; falls back to the
-          # mirror's main head (== its latest synced release) before any
-          # Release exists there.
+          # Newest release tag of the CLI's own repository; falls back to
+          # its main head (== the latest release) before any Release
+          # exists there.
           src="https://github.com/${{ github.repository_owner }}/mcpg-plugin"
           tag=$(gh api "repos/${{ github.repository_owner }}/mcpg-plugin/releases?per_page=1" \
             --jq '.[0].tag_name // empty' 2>/dev/null || true)
@@ -484,9 +485,9 @@ jobs:
       - name: Pack, sign, upload
         env:
           GH_TOKEN: ${{ github.token }}
-          # Dedicated OSS signing key — never the private-monorepo
-          # production key. Absent ⇒ packaged unsigned (cosign bundle
-          # still proves origin).
+          # Dedicated OSS signing key — never a shared production key.
+          # Absent ⇒ packaged unsigned (cosign bundle still proves
+          # origin).
           MCPG_PLUGIN_SIGNING_KEY: ${{ secrets.OSS_PLUGIN_SIGNING_KEY }}
           CRATE: ${{ needs.meta.outputs.crate }}
           VERSION: ${{ needs.meta.outputs.version }}
@@ -631,8 +632,8 @@ jobs:
 
   # ── SBOM + resolved-lock transparency (product tier) ─────────────────
   # ── public API diff — "what changed", without shipping a changelog ──────────
-  # The mirror deliberately drops CHANGELOG.md: it is written from internal
-  # commits and pull requests. A machine-generated diff of the crate's public
+  # Releases deliberately ship no CHANGELOG.md: one written from upstream
+  # commits would not be useful here. A machine-generated diff of the public
   # Rust API against the previous published version answers the same question
   # for a consumer, and cannot leak anything the crate does not already export.
   # Informational, so a crate rustdoc cannot process does not fail a release

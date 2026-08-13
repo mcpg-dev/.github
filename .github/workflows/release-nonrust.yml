@@ -1,4 +1,4 @@
-# Shared release workflow for the NON-RUST public mirror repos, consumed at the
+# Shared release workflow for the NON-RUST repositories, consumed at the
 # moving tag @v1 exactly like release.yml. One tier per publishable shape:
 #
 #   npm    — the Pulumi TypeScript packages (@mcpg/pulumi, -crds, -policy)

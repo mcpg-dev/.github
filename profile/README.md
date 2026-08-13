@@ -7,11 +7,8 @@ Kubernetes operator, Helm charts, and infrastructure-as-code.
 
 ## About these repositories
 
-Every repository in this organization is a one-way mirror of a private
-monorepo, published per project:
-
 - **Issues are welcome** on each repository.
-- **Pull requests are not accepted (yet)** — code changes happen upstream
-  and flow out through releases.
+- **Pull requests are not accepted (yet)** — development happens upstream
+  and flows out through releases.
 - **Releases are tags.** Rust crates are consumed by git reference:
   `{ git = "https://github.com/mcpg-dev/<crate>", tag = "v<version>" }`.
