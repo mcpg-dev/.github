@@ -135,14 +135,13 @@ jobs:
           # the tag consumers reference resolves the way the artifacts were built.
           cargo build --locked
           cargo test --locked
-      - name: Package (manifest hygiene)
-        # --no-verify: the verify build resolves dependencies registry-only,
-        # and sibling deps are git references, not crates.io. Packaging
-        # still validates the manifest and would be the input to any future
-        # registry publish (the version reqs are already exact).
-        # --allow-dirty: the downloaded lockfile artifact and build output are
-        # the only working-tree deltas on a CI checkout.
-        run: cargo package --no-verify --allow-dirty
+      - name: Manifest hygiene
+        # `cargo package` cannot apply here: packaging strips git references
+        # and re-resolves the version pins against crates.io, where sibling
+        # crates deliberately do not exist — crates are consumed by git
+        # reference. The standalone-parse check below is what packaging
+        # would have validated about the manifest itself.
+        run: cargo metadata --no-deps --format-version 1 > /dev/null
 
   # ── GitHub Release shell (all tiers; artifact jobs attach into it) ───
   github-release:
