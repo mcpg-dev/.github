@@ -196,7 +196,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
-        run: gh release upload "$TAG" dist/* --clobber
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --notes "Release $TAG" --verify-tag
+          gh release upload "$TAG" dist/* --clobber
 
   # ── hcl (terraform module) ──────────────────────────────────────────────────
   # Nothing is published: the Terraform Registry reads the repository's tags
