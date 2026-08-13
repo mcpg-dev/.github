@@ -590,7 +590,7 @@ jobs:
           fi
           zip_name="mcpg-plugin-${SHORT}_${VERSION}_${POS}_${PARCH}.zip"
           mcpg-plugin pack --descriptor plugin.yaml --artifact "$lib" \
-            --os "$POS" --arch "$PARCH" --output "$zip_name"
+            --version "$VERSION" --os "$POS" --arch "$PARCH" --output "$zip_name"
           shasum -a 256 "$zip_name" > "${zip_name}.sha256"
           gh release upload "$TAG" "$zip_name" "${zip_name}.sha256" --clobber
           echo "ZIP=$zip_name" >> "$GITHUB_ENV"
