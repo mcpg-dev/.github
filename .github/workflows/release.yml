@@ -331,15 +331,25 @@ jobs:
         if: matrix.musl
         run: |
           set -euo pipefail
-          curl -fsSLo /tmp/musl.tgz --retry 3 --retry-all-errors --max-time 600 \
-            "https://musl.cc/${{ matrix.musl }}-linux-musl-cross.tgz"
-          # musl.cc serves unversioned URLs and rebuilds in place. Verify
-          # against the pinned digest: a mismatch means the upstream tarball
-          # changed and must be re-pinned deliberately, not absorbed silently
-          # into a signed release artifact.
+          # Mirror-first: every repository in the fleet runs this workflow,
+          # so releases must not hinge on one third-party host being up
+          # (musl.cc also serves unversioned URLs and rebuilds in place).
+          for base in \
+            "https://github.com/mcpg-dev/toolchains/releases/download/musl-cross-20260813" \
+            "https://musl.cc"; do
+            if curl -fsSLo /tmp/musl.tgz --retry 3 --retry-all-errors --max-time 600 \
+              "$base/${{ matrix.musl }}-linux-musl-cross.tgz"; then
+              break
+            fi
+            echo "::warning::${base} did not serve the toolchain; trying the next source"
+          done
+          [ -s /tmp/musl.tgz ] || { echo "::error::no source served the ${{ matrix.musl }} toolchain"; exit 1; }
+          # The digest guards whichever source answered: a mismatch means the
+          # tarball changed and must be re-pinned deliberately, not absorbed
+          # silently into a signed release artifact.
           echo "${{ matrix.musl_sha256 }}  /tmp/musl.tgz" > /tmp/musl.sha256
           if ! sha256sum -c /tmp/musl.sha256; then
-            echo "::error::musl.cc ${{ matrix.musl }} toolchain digest changed."
+            echo "::error::${{ matrix.musl }} toolchain digest mismatch."
             echo "Re-pin matrix.musl_sha256 after reviewing the new tarball."
             exit 1
           fi
@@ -483,15 +493,25 @@ jobs:
         if: matrix.musl
         run: |
           set -euo pipefail
-          curl -fsSLo /tmp/musl.tgz --retry 3 --retry-all-errors --max-time 600 \
-            "https://musl.cc/${{ matrix.musl }}-linux-musl-cross.tgz"
-          # musl.cc serves unversioned URLs and rebuilds in place. Verify
-          # against the pinned digest: a mismatch means the upstream tarball
-          # changed and must be re-pinned deliberately, not absorbed silently
-          # into a signed release artifact.
+          # Mirror-first: every repository in the fleet runs this workflow,
+          # so releases must not hinge on one third-party host being up
+          # (musl.cc also serves unversioned URLs and rebuilds in place).
+          for base in \
+            "https://github.com/mcpg-dev/toolchains/releases/download/musl-cross-20260813" \
+            "https://musl.cc"; do
+            if curl -fsSLo /tmp/musl.tgz --retry 3 --retry-all-errors --max-time 600 \
+              "$base/${{ matrix.musl }}-linux-musl-cross.tgz"; then
+              break
+            fi
+            echo "::warning::${base} did not serve the toolchain; trying the next source"
+          done
+          [ -s /tmp/musl.tgz ] || { echo "::error::no source served the ${{ matrix.musl }} toolchain"; exit 1; }
+          # The digest guards whichever source answered: a mismatch means the
+          # tarball changed and must be re-pinned deliberately, not absorbed
+          # silently into a signed release artifact.
           echo "${{ matrix.musl_sha256 }}  /tmp/musl.tgz" > /tmp/musl.sha256
           if ! sha256sum -c /tmp/musl.sha256; then
-            echo "::error::musl.cc ${{ matrix.musl }} toolchain digest changed."
+            echo "::error::${{ matrix.musl }} toolchain digest mismatch."
             echo "Re-pin matrix.musl_sha256 after reviewing the new tarball."
             exit 1
           fi
