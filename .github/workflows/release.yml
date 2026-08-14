@@ -607,6 +607,29 @@ jobs:
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
           subject-path: ${{ env.ZIP }}
+      # The gateway consumes plugins by OCI reference and derives the
+      # platform suffix itself, so each leg publishes its own zip as an
+      # OCI artifact at <version>-<os>-<arch>. One layer, located by
+      # media type on the pull side.
+      - uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish OCI artifact
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          SHORT: ${{ inputs.plugin_short }}
+          POS: ${{ matrix.pos }}
+          PARCH: ${{ matrix.parch }}
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/${{ github.repository_owner }}/plugins/${SHORT}:${VERSION}-${POS}-${PARCH}"
+          echo "pushing $ref"
+          oras push "$ref" \
+            --artifact-type "application/vnd.mcpg.plugin.v1" \
+            "${ZIP}:application/vnd.mcpg.plugin.package.v1+zip"
 
   # ── container image (product tier, repos carrying a Dockerfile) ──────
   # Source-build Dockerfile on native runners per arch (a QEMU-emulated
