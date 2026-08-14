@@ -447,7 +447,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,    triple: x86_64-unknown-linux-gnu,   pos: linux,   parch: amd64, required: true }
+          - { os: ubuntu-latest,    triple: x86_64-unknown-linux-gnu,   pos: linux,   parch: amd64 }
           - { os: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu,  pos: linux,   parch: arm64 }
           - { os: ubuntu-latest,    triple: x86_64-unknown-linux-musl,  pos: linux,   parch: musl-amd64, musl: x86_64,
               musl_sha256: c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea }
@@ -457,9 +457,9 @@ jobs:
           - { os: macos-14,         triple: aarch64-apple-darwin,       pos: darwin,  parch: arm64 }
           - { os: ubuntu-latest,    triple: x86_64-pc-windows-gnu,      pos: windows, parch: amd64, mingw: true }
     runs-on: ${{ matrix.os }}
-    # Exotic lanes are best-effort per plugin (C-dep quirks); linux-amd64
-    # is the integrity floor and fails the run.
-    continue-on-error: ${{ matrix.required != true }}
+    # Every leg counts: a green run must mean every published platform
+    # built, packed, and pushed. A plugin that cannot ship a platform says
+    # so explicitly (a matrix exclusion), never by a swallowed failure.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # The one resolved lockfile every lane builds against (--locked).
@@ -612,12 +612,9 @@ jobs:
       # OCI artifact at <version>-<os>-<arch>. One layer, located by
       # media type on the pull side.
       - uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
       - name: Publish OCI artifact
+        # oras carries its own login — docker/login-action shells out to a
+        # docker CLI the macOS runners do not have.
         env:
           VERSION: ${{ needs.meta.outputs.version }}
           SHORT: ${{ inputs.plugin_short }}
@@ -625,6 +622,8 @@ jobs:
           PARCH: ${{ matrix.parch }}
         run: |
           set -euo pipefail
+          printf '%s' "${{ github.token }}" | \
+            oras login ghcr.io --username "${{ github.actor }}" --password-stdin
           ref="ghcr.io/${{ github.repository_owner }}/plugins/${SHORT}:${VERSION}-${POS}-${PARCH}"
           echo "pushing $ref"
           oras push "$ref" \
