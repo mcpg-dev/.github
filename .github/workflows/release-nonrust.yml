@@ -132,6 +132,20 @@ jobs:
             echo "OSS_NPM_PUBLISH is not set — dry run only"
             npm publish --dry-run --access public
           fi
+      - name: Release record
+        # The artifact lives on the npm registry; the Release record marks
+        # the version on the repository itself.
+        if: vars.OSS_RELEASES_PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          NAME: ${{ needs.meta.outputs.name }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+            --title "$TAG" --verify-tag \
+            --notes "Release ${TAG}. Published to npm as \`${NAME}@${VERSION}\`."
 
   # ── go (terraform provider) ─────────────────────────────────────────────────
   go:
