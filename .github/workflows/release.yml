@@ -51,6 +51,11 @@ on:
         required: false
         type: string
         default: ""
+      skip_platforms:
+        description: "Comma-separated <os>-<arch> lanes this plugin cannot ship (native-dep platform gaps, e.g. windows-amd64,linux-musl-amd64)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -441,7 +446,13 @@ jobs:
 
   # ── plugin cdylibs: packed via mcpg-plugin, signed, attached ─────────
   plugin-artifacts:
-    if: inputs.tier == 'plugin' && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true' && needs.meta.outputs.wasm != 'true'
+    # skip_platforms drops a leg DECLARED impossible (GSSAPI on windows,
+    # a native dep absent for musl) — the skip is visible in the run, and
+    # anything undeclared that fails still fails the release.
+    if: >-
+      inputs.tier == 'plugin' && needs.meta.outputs.publish == 'true'
+      && vars.OSS_ARTIFACTS_PUBLISH == 'true' && needs.meta.outputs.wasm != 'true'
+      && !contains(format(',{0},', inputs.skip_platforms), format(',{0}-{1},', matrix.pos, matrix.parch))
     needs: [meta, verify, github-release, lockfile]
     strategy:
       fail-fast: false
