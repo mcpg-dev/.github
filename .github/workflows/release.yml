@@ -596,11 +596,14 @@ jobs:
             printf '%s' "$MCPG_PLUGIN_SIGNING_KEY" | base64 -d > "$keyfile"
             mcpg-plugin sign --key "$keyfile" "$lib"
             rm -f "$keyfile"
+            # pack embeds only what it is handed — an unreferenced .sig next
+            # to the artifact would ship nothing.
+            sign_args=(--signature "${lib}.sig")
           else
             echo "::warning::OSS_PLUGIN_SIGNING_KEY unset — packaging without embedded Ed25519 signature"
           fi
           zip_name="mcpg-plugin-${SHORT}_${VERSION}_${POS}_${PARCH}.zip"
-          mcpg-plugin pack --descriptor plugin.yaml --artifact "$lib" \
+          mcpg-plugin pack --descriptor plugin.yaml --artifact "$lib" "${sign_args[@]}" \
             --version "$VERSION" --os "$POS" --arch "$PARCH" --output "$zip_name"
           shasum -a 256 "$zip_name" > "${zip_name}.sha256"
           gh release upload "$TAG" "$zip_name" "${zip_name}.sha256" --clobber
