@@ -445,28 +445,49 @@ jobs:
             ${{ env.STAGED }}/*.zip
 
   # ── plugin cdylibs: packed via mcpg-plugin, signed, attached ─────────
+  # Compute the artifact legs, minus the lanes this plugin DECLARES it
+  # cannot ship (GSSAPI on windows, a native dep absent for musl). A
+  # dropped leg is visibly absent from the run; anything undeclared that
+  # fails still fails the release. Job-level `if` cannot see `matrix`,
+  # so the filter must happen before expansion.
+  plugin-matrix:
+    if: inputs.tier == 'plugin' && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true' && needs.meta.outputs.wasm != 'true'
+    needs: meta
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.m.outputs.include }}
+    steps:
+      - id: m
+        env:
+          SKIP: ${{ inputs.skip_platforms }}
+        run: |
+          set -euo pipefail
+          jq -cn --arg skip "$SKIP" '
+            [
+              {os:"ubuntu-latest",    triple:"x86_64-unknown-linux-gnu",   pos:"linux",   parch:"amd64"},
+              {os:"ubuntu-24.04-arm", triple:"aarch64-unknown-linux-gnu",  pos:"linux",   parch:"arm64"},
+              {os:"ubuntu-latest",    triple:"x86_64-unknown-linux-musl",  pos:"linux",   parch:"musl-amd64", musl:"x86_64",
+               musl_sha256:"c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea"},
+              {os:"ubuntu-latest",    triple:"aarch64-unknown-linux-musl", pos:"linux",   parch:"musl-arm64", musl:"aarch64",
+               musl_sha256:"c909817856d6ceda86aa510894fa3527eac7989f0ef6e87b5721c58737a06c38"},
+              {os:"macos-14",         triple:"aarch64-apple-darwin",       pos:"darwin",  parch:"arm64"},
+              {os:"ubuntu-latest",    triple:"x86_64-pc-windows-gnu",      pos:"windows", parch:"amd64", mingw:true}
+            ]
+            | map(select((.pos + "-" + .parch) as $lane | ($skip | split(",") | index($lane)) == null))
+          ' | { read -r inc; echo "include=$inc" >> "$GITHUB_OUTPUT"; }
+      - name: Every lane excluded is a configuration mistake
+        if: steps.m.outputs.include == '[]'
+        run: |
+          echo "::error::skip_platforms excludes every lane"
+          exit 1
+
   plugin-artifacts:
-    # skip_platforms drops a leg DECLARED impossible (GSSAPI on windows,
-    # a native dep absent for musl) — the skip is visible in the run, and
-    # anything undeclared that fails still fails the release.
-    if: >-
-      inputs.tier == 'plugin' && needs.meta.outputs.publish == 'true'
-      && vars.OSS_ARTIFACTS_PUBLISH == 'true' && needs.meta.outputs.wasm != 'true'
-      && !contains(format(',{0},', inputs.skip_platforms), format(',{0}-{1},', matrix.pos, matrix.parch))
-    needs: [meta, verify, github-release, lockfile]
+    if: inputs.tier == 'plugin' && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true' && needs.meta.outputs.wasm != 'true'
+    needs: [meta, verify, github-release, lockfile, plugin-matrix]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-latest,    triple: x86_64-unknown-linux-gnu,   pos: linux,   parch: amd64 }
-          - { os: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu,  pos: linux,   parch: arm64 }
-          - { os: ubuntu-latest,    triple: x86_64-unknown-linux-musl,  pos: linux,   parch: musl-amd64, musl: x86_64,
-              musl_sha256: c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea }
-          # x86_64 host on purpose — see the binaries matrix.
-          - { os: ubuntu-latest,    triple: aarch64-unknown-linux-musl, pos: linux,   parch: musl-arm64, musl: aarch64,
-              musl_sha256: c909817856d6ceda86aa510894fa3527eac7989f0ef6e87b5721c58737a06c38 }
-          - { os: macos-14,         triple: aarch64-apple-darwin,       pos: darwin,  parch: arm64 }
-          - { os: ubuntu-latest,    triple: x86_64-pc-windows-gnu,      pos: windows, parch: amd64, mingw: true }
+        include: ${{ fromJSON(needs.plugin-matrix.outputs.include) }}
     runs-on: ${{ matrix.os }}
     # Every leg counts: a green run must mean every published platform
     # built, packed, and pushed. A plugin that cannot ship a platform says
