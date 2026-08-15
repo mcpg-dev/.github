@@ -1,0 +1,105 @@
+# Shared release workflow for the Go repositories (the Terraform
+# provider), consumed at @main like release.yml. The Terraform Registry
+# ingests a GitHub Release carrying per-platform zips, a SHA256SUMS
+# manifest, and a detached GPG signature over that manifest — it will
+# not read cosign bundles.
+#
+# Consent gates, default-off: OSS_CI_ENABLED, OSS_ARTIFACTS_PUBLISH.
+# Secrets: OSS_TF_REGISTRY_GPG_KEY (+ …_PASSPHRASE) — without the key
+# the binaries still build and attach; the Registry simply cannot
+# ingest them.
+name: Release (go)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+
+jobs:
+  meta:
+    if: vars.OSS_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      name: ${{ steps.v.outputs.name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - id: v
+        run: |
+          set -euo pipefail
+          # Tag-push runs carry the version in the ref; a manual dispatch
+          # runs on a branch, so the version comes from the VERSION file.
+          case "$GITHUB_REF" in
+            refs/tags/*) tag="${GITHUB_REF_NAME}" ;;
+            *)           tag="v$(tr -d '[:space:]' < VERSION)" ;;
+          esac
+          {
+            echo "version=${tag#v}"
+            echo "tag=${tag}"
+            echo "name=${GITHUB_REPOSITORY#*/}"
+          } >> "$GITHUB_OUTPUT"
+
+  go:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet + test
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go build ./...
+          go test ./...
+      - name: Build release binaries
+        if: vars.OSS_ARTIFACTS_PUBLISH == 'true'
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          NAME: ${{ needs.meta.outputs.name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          while read -r goos goarch; do
+            out="${NAME}_v${VERSION}_${goos}_${goarch}"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "dist/${NAME}" .
+            (cd dist && zip -q "${out}.zip" "${NAME}" && rm "${NAME}")
+          done <<'PLATFORMS'
+          linux amd64
+          linux arm64
+          darwin amd64
+          darwin arm64
+          windows amd64
+          PLATFORMS
+          (cd dist && sha256sum *.zip > "${NAME}_${VERSION}_SHA256SUMS")
+      - name: Sign the manifest for the Terraform Registry
+        if: vars.OSS_ARTIFACTS_PUBLISH == 'true' && env.GPG_KEY != ''
+        env:
+          GPG_KEY: ${{ secrets.OSS_TF_REGISTRY_GPG_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.OSS_TF_REGISTRY_GPG_PASSPHRASE }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          NAME: ${{ needs.meta.outputs.name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GPG_KEY" | base64 -d | gpg --batch --import
+          key=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
+          gpg --batch --yes --pinentry-mode loopback \
+            ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
+            --local-user "$key" --detach-sign \
+            "dist/${NAME}_${VERSION}_SHA256SUMS"
+      - name: Attach to the Release
+        if: vars.OSS_ARTIFACTS_PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --notes "Release $TAG" --verify-tag
+          gh release upload "$TAG" dist/* --clobber

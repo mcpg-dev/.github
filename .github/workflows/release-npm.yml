@@ -1,0 +1,117 @@
+# Shared release workflow for the npm-package repositories (the Pulumi
+# TypeScript packages), consumed at @main like release.yml.
+#
+# Consent gates, default-off: OSS_CI_ENABLED (anything runs),
+# OSS_NPM_PUBLISH (real publish vs --dry-run), OSS_RELEASES_PUBLISH
+# (the Release record). Secret: NPM_TOKEN.
+name: Release (npm)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  meta:
+    if: vars.OSS_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      name: ${{ steps.v.outputs.name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - id: v
+        run: |
+          set -euo pipefail
+          # Tag-push runs carry the version in the ref; a manual dispatch
+          # runs on a branch, so the version comes from the manifest.
+          case "$GITHUB_REF" in
+            refs/tags/*) tag="${GITHUB_REF_NAME}" ;;
+            *)           tag="v$(jq -r .version package.json)" ;;
+          esac
+          {
+            echo "version=${tag#v}"
+            echo "tag=${tag}"
+            echo "name=$(jq -r .name package.json)"
+          } >> "$GITHUB_OUTPUT"
+
+  npm:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Wait for sibling packages on the registry
+        # Sibling deps are exact pins re-stated at the release cut, so this
+        # waits for precisely the versions this release was cut against —
+        # registry propagation is seconds-to-minutes, and a bounded wait
+        # turns publish ordering into a non-event.
+        run: |
+          set -euo pipefail
+          deps=$(jq -r '((.dependencies // {}) + (.peerDependencies // {}))
+                        | to_entries[] | select(.key | startswith("@mcpg-dev/"))
+                        | "\(.key)@\(.value)"' package.json)
+          [ -z "$deps" ] && { echo "no sibling packages"; exit 0; }
+          for d in $deps; do
+            echo "waiting for $d"
+            found=""
+            for _ in $(seq 1 60); do
+              if npm view "$d" version >/dev/null 2>&1; then found=1; break; fi
+              sleep 10
+            done
+            [ -n "$found" ] || { echo "::error::$d never appeared on the registry"; exit 1; }
+          done
+      - name: Install + build + test
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npm run build
+          # A package without tests should not invent a green one.
+          if jq -e '.scripts.test' package.json >/dev/null; then npm test; fi
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          NAME: ${{ needs.meta.outputs.name }}
+        run: |
+          set -euo pipefail
+          # The manifest is the version source, exactly as Cargo.toml is on the
+          # Rust side — a tag that disagrees with it is a packaging mistake, not
+          # something to paper over by rewriting the manifest here.
+          manifest=$(jq -r .version package.json)
+          if [ "$manifest" != "$VERSION" ]; then
+            echo "::error::tag ${VERSION} does not match package.json ${manifest}"
+            exit 1
+          fi
+          # Idempotent: a version already on the registry is success, not a
+          # failure, so re-dispatching a partially-completed wave is safe.
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "${NAME}@${VERSION} is already published"
+            exit 0
+          fi
+          if [ "${{ vars.OSS_NPM_PUBLISH }}" = "true" ]; then
+            npm publish --provenance --access public
+          else
+            echo "OSS_NPM_PUBLISH is not set — dry run only"
+            npm publish --dry-run --access public
+          fi
+      - name: Release record
+        # The artifact lives on the npm registry; the Release record marks
+        # the version on the repository itself.
+        if: vars.OSS_RELEASES_PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          NAME: ${{ needs.meta.outputs.name }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+            --title "$TAG" --verify-tag \
+            --notes "Release ${TAG}. Published to npm as \`${NAME}@${VERSION}\`."

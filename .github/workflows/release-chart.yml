@@ -1,0 +1,85 @@
+# Shared release workflow for the charts repository, consumed at @main
+# like release.yml. One repository, several independently-versioned
+# charts, so there is no tag to key off: the job walks every chart
+# directory, lints and renders it, and publishes the ones whose version
+# the registry does not already have. That makes it idempotent and
+# correct when several charts move in one sync.
+#
+# Consent gates, default-off: OSS_CI_ENABLED, OSS_ARTIFACTS_PUBLISH.
+name: Release (charts)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  chart:
+    if: vars.OSS_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      - name: Lint, render and conform every chart
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          fail=0
+          for dir in */; do
+            [ -f "${dir}Chart.yaml" ] || continue
+            echo "::group::${dir%/}"
+            # Subcharts travel vendored UNPACKED under charts/ — helm refuses to
+            # package a chart whose subcharts are .tgz — so resolve offline.
+            helm dependency build "$dir" >/dev/null 2>&1 || helm dependency list "$dir"
+            helm lint "$dir" || fail=1
+            helm template release "$dir" > "/tmp/${dir%/}.yaml" || fail=1
+            echo "::endgroup::"
+          done
+          if [ ! -s /usr/local/bin/kubeconform ]; then
+            curl -fsSL --retry 3 --max-time 120 \
+              https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+              | tar -xz -C /usr/local/bin kubeconform
+          fi
+          for rendered in /tmp/*.yaml; do
+            # `-ignore-missing-schemas` so a CRD-typed resource is skipped
+            # rather than failing a chart whose CRDs the operator owns.
+            kubeconform -summary -ignore-missing-schemas "$rendered" || fail=1
+          done
+          exit "$fail"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        if: vars.OSS_ARTIFACTS_PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the versions the registry is missing
+        if: vars.OSS_ARTIFACTS_PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          repo="oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+          published=0
+          for dir in */; do
+            [ -f "${dir}Chart.yaml" ] || continue
+            name=$(sed -n 's/^name:[[:space:]]*//p' "${dir}Chart.yaml" | head -1)
+            version=$(sed -n 's/^version:[[:space:]]*//p' "${dir}Chart.yaml" | head -1)
+            if helm show chart "${repo}/${name}" --version "$version" >/dev/null 2>&1; then
+              echo "${name} ${version} is already published"
+              continue
+            fi
+            helm package "$dir" -d /tmp/pkg
+            helm push "/tmp/pkg/${name}-${version}.tgz" "$repo"
+            # A per-chart tag + Release is the only meaningful marker in a
+            # mono-repo; the repository tag would be ambiguous across charts.
+            gh release create "${name}-v${version}" \
+              --title "${name} ${version}" \
+              --notes "Helm chart \`${name}\` ${version}. Install: \`helm install ${name} ${repo}/${name} --version ${version}\`" \
+              "/tmp/pkg/${name}-${version}.tgz" || \
+              gh release upload "${name}-v${version}" "/tmp/pkg/${name}-${version}.tgz" --clobber
+            published=$((published + 1))
+          done
+          echo "published ${published} chart(s)"
