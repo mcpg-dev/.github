@@ -64,12 +64,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          # Registry-mandated shapes: the tag carries the v, the file names
+          # do not; the manifest declares the plugin protocol versions.
           while read -r goos goarch; do
-            out="${NAME}_v${VERSION}_${goos}_${goarch}"
+            out="${NAME}_${VERSION}_${goos}_${goarch}"
+            exe="${NAME}"; [ "$goos" = "windows" ] && exe="${NAME}.exe"
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
               go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-              -o "dist/${NAME}" .
-            (cd dist && zip -q "${out}.zip" "${NAME}" && rm "${NAME}")
+              -o "dist/${exe}" .
+            (cd dist && zip -q "${out}.zip" "${exe}" && rm "${exe}")
           done <<'PLATFORMS'
           linux amd64
           linux arm64
@@ -77,7 +80,10 @@ jobs:
           darwin arm64
           windows amd64
           PLATFORMS
-          (cd dist && sha256sum *.zip > "${NAME}_${VERSION}_SHA256SUMS")
+          printf '{"version":1,"metadata":{"protocol_versions":["6.0"]}}\n' \
+            > "dist/${NAME}_${VERSION}_manifest.json"
+          (cd dist && sha256sum *.zip "${NAME}_${VERSION}_manifest.json" \
+            > "${NAME}_${VERSION}_SHA256SUMS")
       - name: Sign the manifest for the Terraform Registry
         if: vars.OSS_ARTIFACTS_PUBLISH == 'true' && env.GPG_KEY != ''
         env:
