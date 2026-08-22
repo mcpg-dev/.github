@@ -118,6 +118,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # Private mirrors consume PRIVATE sibling repos by git reference, where
+      # anonymous fetches 404. The credential is the org App, MINTED per job
+      # (installation tokens live an hour; cargo fetches happen at job start)
+      # — one org credential instead of a standing PAT, by deliberate choice.
+      # A static OSS_SIBLING_FETCH_TOKEN remains the fallback. Public repos
+      # define none of these and their fetches stay anonymous.
+      - name: Mint sibling-fetch token (org App)
+        id: fetch-token
+        if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Dependency access (private sibling mirrors)
+        env:
+          SIBLING_FETCH_TOKEN: ${{ steps.fetch-token.outputs.token || secrets.OSS_SIBLING_FETCH_TOKEN }}
+        run: |
+          if [ -n "${SIBLING_FETCH_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/".insteadOf "https://github.com/${GITHUB_REPOSITORY_OWNER}/"
+            echo "sibling fetch auth configured"
+          else
+            echo "no sibling fetch token — fetches stay anonymous"
+          fi
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4  # stable
         with:
           toolchain: stable
@@ -276,6 +300,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Mint sibling-fetch token (org App)
+        id: fetch-token
+        if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Dependency access (private sibling mirrors)
+        env:
+          SIBLING_FETCH_TOKEN: ${{ steps.fetch-token.outputs.token || secrets.OSS_SIBLING_FETCH_TOKEN }}
+        run: |
+          if [ -n "${SIBLING_FETCH_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/".insteadOf "https://github.com/${GITHUB_REPOSITORY_OWNER}/"
+          fi
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4  # stable
         with:
           toolchain: stable
@@ -315,6 +354,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Mint sibling-fetch token (org App)
+        id: fetch-token
+        if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Dependency access (private sibling mirrors)
+        env:
+          SIBLING_FETCH_TOKEN: ${{ steps.fetch-token.outputs.token || secrets.OSS_SIBLING_FETCH_TOKEN }}
+        run: |
+          if [ -n "${SIBLING_FETCH_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/".insteadOf "https://github.com/${GITHUB_REPOSITORY_OWNER}/"
+          fi
       # The one resolved lockfile every lane builds against (--locked).
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -494,6 +548,21 @@ jobs:
     # so explicitly (a matrix exclusion), never by a swallowed failure.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Mint sibling-fetch token (org App)
+        id: fetch-token
+        if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Dependency access (private sibling mirrors)
+        env:
+          SIBLING_FETCH_TOKEN: ${{ steps.fetch-token.outputs.token || secrets.OSS_SIBLING_FETCH_TOKEN }}
+        run: |
+          if [ -n "${SIBLING_FETCH_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${SIBLING_FETCH_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/".insteadOf "https://github.com/${GITHUB_REPOSITORY_OWNER}/"
+          fi
       # The one resolved lockfile every lane builds against (--locked).
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -689,17 +758,33 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      # Private mirrors' Dockerfiles fetch PRIVATE sibling crates during
+      # `cargo build`; the token rides a BuildKit secret (never a layer).
+      # Minted from the org App per job; static token stays the fallback;
+      # public repos define neither and the flag is simply not passed.
+      - name: Mint sibling-fetch token (org App)
+        id: fetch-token
+        if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
       - id: push
         env:
           CRATE: ${{ needs.meta.outputs.crate }}
           VERSION: ${{ needs.meta.outputs.version }}
           ARCH: amd64
+          SIBLING_FETCH_TOKEN: ${{ steps.fetch-token.outputs.token || secrets.OSS_SIBLING_FETCH_TOKEN }}
         run: |
           set -euo pipefail
           repo="ghcr.io/${{ github.repository_owner }}/${CRATE}"
+          secret_args=()
+          [ -n "${SIBLING_FETCH_TOKEN:-}" ] && secret_args=(--secret id=sibling_fetch_token,env=SIBLING_FETCH_TOKEN)
           docker buildx build --push \
             --platform "linux/${ARCH}" \
             --provenance mode=max --sbom true \
+            "${secret_args[@]}" \
             --label "org.opencontainers.image.version=${VERSION}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
@@ -726,17 +811,29 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      - name: Mint sibling-fetch token (org App)
+        id: fetch-token
+        if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
       - id: push
         env:
           CRATE: ${{ needs.meta.outputs.crate }}
           VERSION: ${{ needs.meta.outputs.version }}
           ARCH: arm64
+          SIBLING_FETCH_TOKEN: ${{ steps.fetch-token.outputs.token || secrets.OSS_SIBLING_FETCH_TOKEN }}
         run: |
           set -euo pipefail
           repo="ghcr.io/${{ github.repository_owner }}/${CRATE}"
+          secret_args=()
+          [ -n "${SIBLING_FETCH_TOKEN:-}" ] && secret_args=(--secret id=sibling_fetch_token,env=SIBLING_FETCH_TOKEN)
           docker buildx build --push \
             --platform "linux/${ARCH}" \
             --provenance mode=max --sbom true \
+            "${secret_args[@]}" \
             --label "org.opencontainers.image.version=${VERSION}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
