@@ -207,8 +207,8 @@ jobs:
 
           (binaries: `cargo install --git https://github.com/${{ github.repository }} --tag ${{ needs.meta.outputs.tag }} ${{ needs.meta.outputs.crate }}`, or use the packed assets below)
 
-          Every asset is signed with [cosign](https://docs.sigstore.dev/) (keyless, Sigstore transparency log)
-          and carries a SLSA build-provenance attestation. Verify one with:
+          Every asset is signed with [cosign](https://docs.sigstore.dev/) (keyless, Sigstore transparency log);
+          public releases also carry a SLSA build-provenance attestation. Verify one with:
 
           ```
           gh attestation verify <file> --repo ${{ github.repository }}
@@ -492,7 +492,11 @@ jobs:
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
             gh release upload "$TAG" "${f}.sigstore.json" --clobber
           done
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
+      # Attestations are unavailable on private repos under this org's plan —
+      # persisting one fails the whole job. Cosign bundles above cover the
+      # signature need either way; public repos still attest.
+      - if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
           subject-path: |
             ${{ env.STAGED }}/*.tar.xz
@@ -708,7 +712,11 @@ jobs:
         run: |
           cosign sign-blob --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
           gh release upload "$TAG" "${ZIP}.sigstore.json" --clobber
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
+      # Attestations are unavailable on private repos under this org's plan —
+      # persisting one fails the whole job. Cosign bundles above cover the
+      # signature need either way; public repos still attest.
+      - if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
           subject-path: ${{ env.ZIP }}
       # The gateway consumes plugins by OCI reference and derives the
