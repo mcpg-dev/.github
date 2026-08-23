@@ -81,7 +81,7 @@ jobs:
   # execute nothing.
   meta:
     if: vars.OSS_CI_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     outputs:
       crate: ${{ steps.m.outputs.crate }}
       version: ${{ steps.m.outputs.version }}
@@ -120,7 +120,7 @@ jobs:
   # correctness gate — and the entire run when Releases are still gated off.
   verify:
     needs: [meta, lockfile]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # Private mirrors consume PRIVATE sibling repos by git reference, where
@@ -193,7 +193,7 @@ jobs:
     # lookup an action does not do.
     if: needs.meta.outputs.publish == 'true'
     needs: [meta, verify]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     outputs:
       release_id: ${{ steps.rel.outputs.release_id }}
     steps:
@@ -278,7 +278,7 @@ jobs:
     # badge is meaningful for every repo.
     if: ${{ !cancelled() && needs.meta.result == 'success' && needs.meta.outputs.publish == 'true' && needs.github-release.result == 'success' }}
     needs: [meta, github-release, binaries, plugin-artifacts, image-manifest, public-api-diff, sbom]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     steps:
       - name: Publish the record
         env:
@@ -302,7 +302,7 @@ jobs:
   # self-consistent.
   lockfile:
     needs: meta
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Mint sibling-fetch token (org App)
@@ -346,16 +346,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,   triple: x86_64-unknown-linux-gnu }
+          - { os: "${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}", triple: x86_64-unknown-linux-gnu }
           - { os: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
-          - { os: ubuntu-latest,   triple: x86_64-unknown-linux-musl,  musl: x86_64,
+          - { os: "${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}", triple: x86_64-unknown-linux-musl,  musl: x86_64,
               musl_sha256: c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea }
           # x86_64 host on purpose: the musl.cc cross toolchains are
           # x86_64-hosted for BOTH targets, so this lane cross-compiles.
-          - { os: ubuntu-latest,   triple: aarch64-unknown-linux-musl, musl: aarch64,
+          - { os: "${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}", triple: aarch64-unknown-linux-musl, musl: aarch64,
               musl_sha256: c909817856d6ceda86aa510894fa3527eac7989f0ef6e87b5721c58737a06c38 }
+          # Hosted on purpose, even for private repos: darwin has no
+          # self-hosted lane (the M1 is repo-scoped to the monorepo), and
+          # the gnu-arm lane compiles natively on arm hosts. Both consume
+          # paid minutes for private repos; images never depend on them.
           - { os: macos-14,        triple: aarch64-apple-darwin }
-          - { os: ubuntu-latest,   triple: x86_64-pc-windows-gnu,      mingw: true }
+          - { os: "${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}", triple: x86_64-pc-windows-gnu,      mingw: true }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -516,7 +520,7 @@ jobs:
   plugin-matrix:
     if: inputs.tier == 'plugin' && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true' && needs.meta.outputs.wasm != 'true'
     needs: meta
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     outputs:
       include: ${{ steps.m.outputs.include }}
     steps:
@@ -755,7 +759,7 @@ jobs:
   image-amd64:
     if: inputs.tier == 'product' && inputs.has_image && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true'
     needs: [meta, verify, lockfile]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     outputs:
       digest: ${{ steps.push.outputs.digest }}
       extra_digests: ${{ steps.push.outputs.extra_digests }}
@@ -831,12 +835,19 @@ jobs:
   image-arm64:
     if: inputs.tier == 'product' && inputs.has_image && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true'
     needs: [meta, verify, lockfile]
-    runs-on: ubuntu-24.04-arm
+    # Private repos build this leg under QEMU on the x86 self-hosted set —
+    # slower than a native arm host, but off the paid-minutes budget. Public
+    # repos keep the native hosted arm runner.
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-24.04-arm' }}
     outputs:
       digest: ${{ steps.push.outputs.digest }}
       extra_digests: ${{ steps.push.outputs.extra_digests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - if: ${{ github.event.repository.private }}
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
+        with:
+          platforms: arm64
       # Stage the resolved lockfile into the build context so the image
       # compiles the same dependency graph as the binary lanes.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
@@ -903,7 +914,7 @@ jobs:
   image-manifest:
     if: inputs.tier == 'product' && inputs.has_image && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true'
     needs: [meta, image-amd64, image-arm64]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     steps:
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
@@ -956,7 +967,7 @@ jobs:
   public-api-diff:
     if: inputs.tier != 'product' && needs.meta.outputs.publish == 'true'
     needs: [meta, verify, github-release]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     continue-on-error: true
     timeout-minutes: 30
     steps:
@@ -1026,7 +1037,7 @@ jobs:
     # not part of that gate.
     if: needs.meta.outputs.publish == 'true'
     needs: [meta, verify, github-release, lockfile]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4  # stable
