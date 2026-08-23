@@ -56,6 +56,11 @@ on:
         required: false
         type: string
         default: ""
+      extra_images:
+        description: "Variant images from the same Dockerfile: comma-separated <build target>=<package name> pairs (product tier, e.g. tui=mcpg-inspector-tui)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -753,6 +758,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.push.outputs.digest }}
+      extra_digests: ${{ steps.push.outputs.extra_digests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # Stage the resolved lockfile into the build context so the image
@@ -799,6 +805,28 @@ jobs:
             --metadata-file /tmp/meta.json \
             --tag "${repo}:${VERSION}-${ARCH}" .
           echo "digest=$(python3 -c "import json;print(json.load(open('/tmp/meta.json'))['containerimage.digest'])")" >> "$GITHUB_OUTPUT"
+          # Variant images: same Dockerfile, one build target per pair,
+          # published under its own package name. Layer cache is shared, so
+          # each extra build reuses everything up to its final stage.
+          extra=""
+          IFS=',' read -ra pairs <<< "${{ inputs.extra_images }}"
+          for pair in "${pairs[@]}"; do
+            [ -n "$pair" ] || continue
+            t="${pair%%=*}"; n="${pair#*=}"
+            docker buildx build --push \
+              --platform "linux/${ARCH}" \
+              --provenance mode=max --sbom true \
+              "${secret_args[@]}" \
+              --target "$t" \
+              --label "org.opencontainers.image.version=${VERSION}" \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --metadata-file /tmp/meta-extra.json \
+              --tag "ghcr.io/${{ github.repository_owner }}/${n}:${VERSION}-${ARCH}" .
+            d="$(python3 -c "import json;print(json.load(open('/tmp/meta-extra.json'))['containerimage.digest'])")"
+            extra="${extra:+$extra }${n}=${d}"
+          done
+          echo "extra_digests=${extra}" >> "$GITHUB_OUTPUT"
 
   image-arm64:
     if: inputs.tier == 'product' && inputs.has_image && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true'
@@ -806,6 +834,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     outputs:
       digest: ${{ steps.push.outputs.digest }}
+      extra_digests: ${{ steps.push.outputs.extra_digests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # Stage the resolved lockfile into the build context so the image
@@ -848,6 +877,28 @@ jobs:
             --metadata-file /tmp/meta.json \
             --tag "${repo}:${VERSION}-${ARCH}" .
           echo "digest=$(python3 -c "import json;print(json.load(open('/tmp/meta.json'))['containerimage.digest'])")" >> "$GITHUB_OUTPUT"
+          # Variant images: same Dockerfile, one build target per pair,
+          # published under its own package name. Layer cache is shared, so
+          # each extra build reuses everything up to its final stage.
+          extra=""
+          IFS=',' read -ra pairs <<< "${{ inputs.extra_images }}"
+          for pair in "${pairs[@]}"; do
+            [ -n "$pair" ] || continue
+            t="${pair%%=*}"; n="${pair#*=}"
+            docker buildx build --push \
+              --platform "linux/${ARCH}" \
+              --provenance mode=max --sbom true \
+              "${secret_args[@]}" \
+              --target "$t" \
+              --label "org.opencontainers.image.version=${VERSION}" \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --metadata-file /tmp/meta-extra.json \
+              --tag "ghcr.io/${{ github.repository_owner }}/${n}:${VERSION}-${ARCH}" .
+            d="$(python3 -c "import json;print(json.load(open('/tmp/meta-extra.json'))['containerimage.digest'])")"
+            extra="${extra:+$extra }${n}=${d}"
+          done
+          echo "extra_digests=${extra}" >> "$GITHUB_OUTPUT"
 
   image-manifest:
     if: inputs.tier == 'product' && inputs.has_image && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true'
@@ -874,6 +925,25 @@ jobs:
             "${repo}@${{ needs.image-arm64.outputs.digest }}"
           digest=$(docker buildx imagetools inspect "${repo}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
           cosign sign --yes "${repo}@${digest}"
+          # Variant images get the same merge+sign, per package name. The
+          # per-arch jobs emit "name=digest" pairs; a name missing from
+          # either arch is a hard error, not a single-arch index.
+          amd="${{ needs.image-amd64.outputs.extra_digests }}"
+          arm="${{ needs.image-arm64.outputs.extra_digests }}"
+          for pair in $amd; do
+            n="${pair%%=*}"; da="${pair#*=}"
+            dr=""
+            for p2 in $arm; do [ "${p2%%=*}" = "$n" ] && dr="${p2#*=}"; done
+            if [ -z "$dr" ]; then
+              echo "::error::variant image ${n}: amd64 digest present but no arm64 digest — refusing a single-arch index"
+              exit 1
+            fi
+            vrepo="ghcr.io/${{ github.repository_owner }}/${n}"
+            docker buildx imagetools create -t "${vrepo}:${VERSION}" \
+              "${vrepo}@${da}" "${vrepo}@${dr}"
+            vdigest=$(docker buildx imagetools inspect "${vrepo}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+            cosign sign --yes "${vrepo}@${vdigest}"
+          done
 
   # ── SBOM + resolved-lock transparency (product tier) ─────────────────
   # ── public API diff — "what changed", without shipping a changelog ──────────
