@@ -750,6 +750,17 @@ jobs:
           oras push "$ref" \
             --artifact-type "application/vnd.mcpg.plugin.v1" \
             "${ZIP}:application/vnd.mcpg.plugin.package.v1+zip"
+          # The floating `protocol-<major>-<os>-<arch>` tag lets a gateway pull
+          # "the newest build that speaks protocol N for my platform" without
+          # pinning a version, and it is the form our own documentation uses.
+          # It is an `oras tag` of the manifest just pushed — same digest, so
+          # it inherits that tag's signatures and adds no second artefact.
+          proto="$(sed -n 's/^protocol_version:[[:space:]]*//p' plugin.yaml | head -1 | tr -d '"'"'"' ')"
+          if [ -n "$proto" ]; then
+            oras tag "$ref" "protocol-${proto%%.*}-${POS}-${PARCH}"
+          else
+            echo "::warning::no protocol_version in plugin.yaml — no floating protocol tag"
+          fi
 
   # ── container image (product tier, repos carrying a Dockerfile) ──────
   # Source-build Dockerfile on native runners per arch (a QEMU-emulated

@@ -61,7 +61,15 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          repo="oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+          # Derived from the REPOSITORY, not the owner plus a literal. Both
+          # spell `ghcr.io/mcpg-dev/charts` for the public charts repo, so
+          # this changes nothing today — but a second charts repo would have
+          # published into the public repo's namespace. Nothing would have
+          # collided (the chart names differ) and every package is born
+          # private, so the separation would have rested on per-package
+          # visibility staying correct forever, with adjacent rows named
+          # `charts/mcpg` and `charts/mcpg-cloud-platform`.
+          repo="oci://ghcr.io/${GITHUB_REPOSITORY}"
           published=0
           for dir in */; do
             [ -f "${dir}Chart.yaml" ] || continue
