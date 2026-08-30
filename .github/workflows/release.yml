@@ -682,16 +682,22 @@ jobs:
           # Entry symbols the host resolves at load. A cdylib built without
           # `cdylib-export` compiles and packs cleanly and then fails at
           # dlopen in production — the one place this must be caught is here.
+          # PE exports live in the export TABLE, which objdump -p prints and
+          # nm does not — reading COFF symbols passes a correct dll to the
+          # wrong verdict. ELF and Mach-O read their dynamic tables.
           case "$POS" in
-            windows) exports=$(x86_64-w64-mingw32-nm "$lib" 2>/dev/null || x86_64-w64-mingw32-objdump -p "$lib") ;;
+            windows) exports=$(x86_64-w64-mingw32-objdump -p "$lib") ;;
             darwin)  exports=$(nm -gU "$lib") ;;
             *)       exports=$(nm -D "$lib") ;;
           esac
           for sym in mcpg_plugin_register mcpg_plugin_abi_layout; do
-            if ! printf '%s' "$exports" | grep -q "$sym"; then
-              echo "::error::$lib does not export $sym — the gateway refuses it at load. The cdylib must build with --features cdylib-export."
-              exit 1
-            fi
+            case "$exports" in
+              *"$sym"*) : ;;
+              *)
+                echo "::error::$lib does not export $sym — the gateway refuses it at load. The cdylib must build with --features cdylib-export."
+                exit 1
+                ;;
+            esac
           done
           case "$TRIPLE" in
             *linux-gnu)
