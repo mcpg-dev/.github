@@ -661,28 +661,51 @@ jobs:
             # SAME base so the symbol floor matches by construction.
             docker run --rm -v "$PWD":/src -w /src "${{ matrix.build_container }}" \
               sh -c "apt-get update -qq && apt-get install -y -qq protobuf-compiler libkrb5-dev pkg-config \
-                     && cargo build --release --locked --lib --target ${{ matrix.triple }}"
+                     && cargo build --release --locked --lib --target ${{ matrix.triple }} --features cdylib-export"
           else
-            cargo build --release --locked --lib --target ${{ matrix.triple }}
+            cargo build --release --locked --lib --target ${{ matrix.triple }} --features cdylib-export
           fi
-      - name: Enforce the glibc floor
-        if: contains(matrix.triple, 'linux-gnu')
+      - name: Enforce the artifact contract
         env:
           CRATE: ${{ needs.meta.outputs.crate }}
           TRIPLE: ${{ matrix.triple }}
+          POS: ${{ matrix.pos }}
         run: |
           set -euo pipefail
           crate_us=$(echo "$CRATE" | tr '-' '_')
-          lib="target/${TRIPLE}/release/lib${crate_us}.so"
+          case "$POS" in
+            windows) lib="target/${TRIPLE}/release/${crate_us}.dll" ;;
+            darwin)  lib="target/${TRIPLE}/release/lib${crate_us}.dylib" ;;
+            *)       lib="target/${TRIPLE}/release/lib${crate_us}.so" ;;
+          esac
           [ -f "$lib" ] || { echo "missing $lib"; exit 1; }
-          floor="2.36"
-          max=$(objdump -T "$lib" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1 || true)
-          max="${max#GLIBC_}"
-          if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$max" "$floor" | sort -V | tail -1)" != "$floor" ]; then
-            echo "::error::$lib requires GLIBC_$max, above the $floor floor — it would fail dlopen inside every published (bookworm-based) gateway image. The build must run in the bookworm container."
-            exit 1
-          fi
-          echo "glibc floor ok: max required ${max:-none} <= $floor"
+          # Entry symbols the host resolves at load. A cdylib built without
+          # `cdylib-export` compiles and packs cleanly and then fails at
+          # dlopen in production — the one place this must be caught is here.
+          case "$POS" in
+            windows) exports=$(x86_64-w64-mingw32-nm "$lib" 2>/dev/null || x86_64-w64-mingw32-objdump -p "$lib") ;;
+            darwin)  exports=$(nm -gU "$lib") ;;
+            *)       exports=$(nm -D "$lib") ;;
+          esac
+          for sym in mcpg_plugin_register mcpg_plugin_abi_layout; do
+            if ! printf '%s' "$exports" | grep -q "$sym"; then
+              echo "::error::$lib does not export $sym — the gateway refuses it at load. The cdylib must build with --features cdylib-export."
+              exit 1
+            fi
+          done
+          case "$TRIPLE" in
+            *linux-gnu)
+              floor="2.36"
+              max=$(objdump -T "$lib" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1 || true)
+              max="${max#GLIBC_}"
+              if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$max" "$floor" | sort -V | tail -1)" != "$floor" ]; then
+                echo "::error::$lib requires GLIBC_$max, above the $floor floor — it would fail dlopen inside every published (bookworm-based) gateway image."
+                exit 1
+              fi
+              echo "glibc floor ok: max required ${max:-none} <= $floor"
+              ;;
+          esac
+          echo "artifact contract ok"
       - name: Install mcpg-plugin CLI (from its repository)
         env:
           GH_TOKEN: ${{ github.token }}
