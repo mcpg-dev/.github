@@ -533,8 +533,10 @@ jobs:
           set -euo pipefail
           jq -cn --arg skip "$SKIP" '
             [
-              {os:"ubuntu-latest",    triple:"x86_64-unknown-linux-gnu",   pos:"linux",   parch:"amd64"},
-              {os:"ubuntu-24.04-arm", triple:"aarch64-unknown-linux-gnu",  pos:"linux",   parch:"arm64"},
+              {os:"ubuntu-latest",    triple:"x86_64-unknown-linux-gnu",   pos:"linux",   parch:"amd64",
+               build_container:"rust:1-bookworm"},
+              {os:"ubuntu-24.04-arm", triple:"aarch64-unknown-linux-gnu",  pos:"linux",   parch:"arm64",
+               build_container:"rust:1-bookworm"},
               {os:"ubuntu-latest",    triple:"x86_64-unknown-linux-musl",  pos:"linux",   parch:"musl-amd64", musl:"x86_64",
                musl_sha256:"c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea"},
               {os:"ubuntu-latest",    triple:"aarch64-unknown-linux-musl", pos:"linux",   parch:"musl-arm64", musl:"aarch64",
@@ -650,7 +652,37 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -y -q mingw-w64 nasm cmake
           echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
       - name: Build cdylib
-        run: cargo build --release --locked --lib --target ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.build_container || '' }}" ]; then
+            # linux-gnu links against the build host's glibc, and the runner
+            # image is newer than the bookworm base every published gateway
+            # image runs — a host build dlopen-fails there. Build inside the
+            # SAME base so the symbol floor matches by construction.
+            docker run --rm -v "$PWD":/src -w /src "${{ matrix.build_container }}" \
+              sh -c "apt-get update -qq && apt-get install -y -qq protobuf-compiler libkrb5-dev pkg-config \
+                     && cargo build --release --locked --lib --target ${{ matrix.triple }}"
+          else
+            cargo build --release --locked --lib --target ${{ matrix.triple }}
+          fi
+      - name: Enforce the glibc floor
+        if: contains(matrix.triple, 'linux-gnu')
+        env:
+          CRATE: ${{ needs.meta.outputs.crate }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          crate_us=$(echo "$CRATE" | tr '-' '_')
+          lib="target/${TRIPLE}/release/lib${crate_us}.so"
+          [ -f "$lib" ] || { echo "missing $lib"; exit 1; }
+          floor="2.36"
+          max=$(objdump -T "$lib" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1 || true)
+          max="${max#GLIBC_}"
+          if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$max" "$floor" | sort -V | tail -1)" != "$floor" ]; then
+            echo "::error::$lib requires GLIBC_$max, above the $floor floor — it would fail dlopen inside every published (bookworm-based) gateway image. The build must run in the bookworm container."
+            exit 1
+          fi
+          echo "glibc floor ok: max required ${max:-none} <= $floor"
       - name: Install mcpg-plugin CLI (from its repository)
         env:
           GH_TOKEN: ${{ github.token }}
