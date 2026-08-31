@@ -662,6 +662,12 @@ jobs:
             docker run --rm -v "$PWD":/src -w /src "${{ matrix.build_container }}" \
               sh -c "apt-get update -qq && apt-get install -y -qq protobuf-compiler libkrb5-dev pkg-config \
                      && cargo build --release --locked --lib --target ${{ matrix.triple }} --features cdylib-export"
+            # The container runs as root, so on a cold cache it CREATES
+            # target/ root-owned — and the later host-side signing step
+            # cannot write the .sig next to the artifact. Hand the tree
+            # back to the runner user. (A warm rust-cache restore masks
+            # this by pre-creating the directories runner-owned.)
+            sudo chown -R "$(id -u):$(id -g)" target
           else
             cargo build --release --locked --lib --target ${{ matrix.triple }} --features cdylib-export
           fi
