@@ -661,6 +661,7 @@ jobs:
             # SAME base so the symbol floor matches by construction.
             docker run --rm -v "$PWD":/src -w /src "${{ matrix.build_container }}" \
               sh -c "apt-get update -qq && apt-get install -y -qq protobuf-compiler libkrb5-dev pkg-config \
+                       cmake clang libclang-dev libxml2-dev libsasl2-dev libssl-dev zlib1g-dev \
                      && cargo build --release --locked --lib --target ${{ matrix.triple }} --features cdylib-export"
             # The container runs as root, so on a cold cache it CREATES
             # target/ root-owned — and the later host-side signing step
