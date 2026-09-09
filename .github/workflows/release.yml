@@ -777,7 +777,8 @@ jobs:
           fi
           zip_name="mcpg-plugin-${SHORT}_${VERSION}_${POS}_${PARCH}.zip"
           mcpg-plugin pack --descriptor plugin.yaml --artifact "$lib" "${sign_args[@]}" \
-            --version "$VERSION" --os "$POS" --arch "$PARCH" --output "$zip_name"
+            --version "$VERSION" --os "$POS" --arch "$PARCH" --output "$zip_name" \
+            --emit-config plugin-artifact-config.json
           shasum -a 256 "$zip_name" > "${zip_name}.sha256"
           gh release upload "$TAG" "$zip_name" "${zip_name}.sha256" --clobber
           echo "ZIP=$zip_name" >> "$GITHUB_ENV"
@@ -819,6 +820,7 @@ jobs:
           echo "pushing $ref"
           oras push "$ref" \
             --artifact-type "application/vnd.mcpg.plugin.v1" \
+            --config plugin-artifact-config.json:application/vnd.mcpg.plugin.config.v1+json \
             "${ZIP}:application/vnd.mcpg.plugin.package.v1+zip"
           # The floating `protocol-<major>-<os>-<arch>` tag lets a gateway pull
           # "the newest build that speaks protocol N for my platform" without
@@ -914,7 +916,8 @@ jobs:
           fi
           zip_name="mcpg-plugin-${SHORT}_${VERSION}_wasi_wasm.zip"
           mcpg-plugin pack --descriptor plugin.yaml --artifact "$artifact" "${sign_args[@]}" \
-            --version "$VERSION" --os wasi --arch wasm --output "$zip_name"
+            --version "$VERSION" --os wasi --arch wasm --output "$zip_name" \
+            --emit-config plugin-artifact-config.json
           shasum -a 256 "$zip_name" > "${zip_name}.sha256"
           gh release upload "$TAG" "$zip_name" "${zip_name}.sha256" --clobber
           echo "ZIP=$zip_name" >> "$GITHUB_ENV"
@@ -945,6 +948,7 @@ jobs:
           echo "pushing $ref"
           oras push "$ref" \
             --artifact-type "application/vnd.mcpg.plugin.v1" \
+            --config plugin-artifact-config.json:application/vnd.mcpg.plugin.config.v1+json \
             "${ZIP}:application/vnd.mcpg.plugin.package.v1+zip"
           proto="$(sed -n 's/^protocol_version:[[:space:]]*//p' plugin.yaml | head -1 | tr -d '"'"'"' ')"
           if [ -n "$proto" ]; then
