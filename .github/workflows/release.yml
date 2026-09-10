@@ -709,13 +709,23 @@ jobs:
           case "$TRIPLE" in
             *linux-gnu)
               floor="2.36"
-              max=$(objdump -T "$lib" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1 || true)
+              # A failed scan must not read as a clean one: an empty result
+              # would skip the comparison below and report the floor as met.
+              if ! syms="$(objdump -T "$lib")"; then
+                echo "::error::objdump could not read $lib — the glibc floor is unverifiable, which is not the same as met."
+                exit 1
+              fi
+              max="$(printf '%s\n' "$syms" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1 || true)"
               max="${max#GLIBC_}"
-              if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$max" "$floor" | sort -V | tail -1)" != "$floor" ]; then
+              if [ -z "$max" ]; then
+                echo "::error::$lib references no GLIBC_ symbol, which a glibc cdylib always does — the scan did not work."
+                exit 1
+              fi
+              if [ "$(printf '%s\n%s\n' "$max" "$floor" | sort -V | tail -1)" != "$floor" ]; then
                 echo "::error::$lib requires GLIBC_$max, above the $floor floor — it would fail dlopen inside every published (bookworm-based) gateway image."
                 exit 1
               fi
-              echo "glibc floor ok: max required ${max:-none} <= $floor"
+              echo "glibc floor ok: max required $max <= $floor"
               ;;
           esac
           echo "artifact contract ok"
