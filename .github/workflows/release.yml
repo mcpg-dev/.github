@@ -845,6 +845,95 @@ jobs:
           fi
 
   # ── wasm artifact (plugin tier, runtime wasi-*) ──────────────────────
+  # The per-platform tags the matrix above pushes are what the GATEWAY
+  # resolves — it knows its own os/arch/libc and appends the suffix itself.
+  # Everything else that consumes a plugin resolves a platform from an INDEX:
+  # `docker pull`, `skopeo`, `crane`, a mirror copying one version by
+  # reference, a scanner, an admission controller. Without one they get a 404
+  # on the bare `:<version>` / `:protocol-<major>` tag the published schema
+  # documents, so this is the difference between a coordinate that exists for
+  # one consumer and one that exists for all of them.
+  #
+  # glibc and musl cannot share an index: an OCI platform descriptor has os and
+  # architecture and no libc field, so musl gets its own `-musl` index under
+  # the same convention the container images use. WASI is a different runtime
+  # with one arch-neutral artifact, so it has no index and this job skips it.
+  plugin-index:
+    if: inputs.tier == 'plugin' && needs.meta.outputs.publish == 'true' && vars.OSS_ARTIFACTS_PUBLISH == 'true' && needs.meta.outputs.wasm != 'true'
+    needs: [meta, plugin-artifacts]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+      - name: Assemble multi-platform indexes
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          SHORT: ${{ inputs.plugin_short }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ github.token }}" | \
+            oras login ghcr.io --username "${{ github.actor }}" --password-stdin
+          repo="ghcr.io/${{ github.repository_owner }}/plugins/${SHORT}"
+          proto="$(sed -n 's/^protocol_version:[[:space:]]*//p' plugin.yaml | head -1 | tr -d '"'"'"' ')"
+          if [ -z "$proto" ]; then
+            echo "::error::plugin.yaml declares no protocol_version — cannot name the floating index tag"
+            exit 1
+          fi
+          major="${proto%%.*}"
+
+          # suffix -> "<oci-os> <oci-arch>"; musl maps to plain linux because the
+          # musl index is distinguished by its TAG, not by a platform field.
+          platform_for() {
+            case "$1" in
+              linux-amd64|linux-musl-amd64)   echo "linux amd64" ;;
+              linux-arm64|linux-musl-arm64)   echo "linux arm64" ;;
+              darwin-amd64)                   echo "darwin amd64" ;;
+              darwin-arm64)                   echo "darwin arm64" ;;
+              windows-amd64)                  echo "windows amd64" ;;
+              windows-arm64)                  echo "windows arm64" ;;
+              *)                              echo "" ;;
+            esac
+          }
+
+          # Indexes only the per-platform tags that actually exist, so a plugin
+          # that excludes a platform is not a failure here.
+          build_index() {
+            out_tag="$1"; float_tag="$2"; shift 2
+            members=()
+            for s in "$@"; do
+              ref="${repo}:${VERSION}-${s}"
+              if ! desc="$(oras manifest fetch --descriptor "$ref" 2>/dev/null)"; then
+                echo "  skip ${s} — no tag (${ref})"
+                continue
+              fi
+              read -r os arch <<<"$(platform_for "$s")"
+              if [ -z "${os:-}" ]; then
+                echo "::warning::no platform mapping for ${s} — left out of ${out_tag}"
+                continue
+              fi
+              members+=("$(printf '%s' "$desc" | jq -c \
+                --arg os "$os" --arg arch "$arch" \
+                '{mediaType, digest, size, platform:{os:$os, architecture:$arch}}')")
+            done
+            if [ "${#members[@]}" -eq 0 ]; then
+              echo "  no members for ${repo}:${out_tag} — skipping"
+              return 0
+            fi
+            jq -cn --argjson m "$(printf '%s\n' "${members[@]}" | jq -cs '.')" \
+              '{schemaVersion:2, mediaType:"application/vnd.oci.image.index.v1+json",
+                artifactType:"application/vnd.mcpg.plugin.v1", manifests:$m}' \
+              | oras manifest push "${repo}:${out_tag}" \
+                  --media-type application/vnd.oci.image.index.v1+json -
+            echo "  pushed ${repo}:${out_tag} (${#members[@]} platform(s))"
+            oras tag "${repo}:${out_tag}" "${float_tag}"
+            echo "  tagged ${repo}:${float_tag}"
+          }
+
+          build_index "${VERSION}" "protocol-${major}" \
+            linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 windows-arm64
+          build_index "${VERSION}-musl" "protocol-${major}-musl" \
+            linux-musl-amd64 linux-musl-arm64
+
   # One wasm32-wasip2 component instead of the six-platform native matrix.
   # rustc emits a Component Model binary for this target, which is what
   # `runtime: wasi-v1` loads; pack/sign/push mirror the native leg with
