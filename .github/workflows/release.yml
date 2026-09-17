@@ -5,10 +5,11 @@
 # ║  release tag. Tiers:                                                     ║
 # ║                                                                          ║
 # ║    lib      GitHub Release + transparency assets (lock/SBOM/API diff)   ║
-# ║    plugin   + 6-lane cdylib build → signed zips as release assets        ║
+# ║    plugin   + 6-lane cdylib build → signed zips as release assets,       ║
+# ║             each also pushed as a cosign-signed OCI artifact (+ index)   ║
 # ║    product  + 6-lane binary tarballs (+ companion bins) → cosign         ║
-# ║             bundles + provenance attestations + SBOM (+ container        ║
-# ║             image when the repo carries a Dockerfile)                    ║
+# ║             bundles + provenance attestations + SBOM (+ cosign-signed    ║
+# ║             container image when the repo carries a Dockerfile)          ║
 # ║                                                                          ║
 # ║  Crates are consumed by GIT REFERENCE (git + tag in the manifest), not   ║
 # ║  crates.io — the release tag IS the publish. This workflow cuts the      ║
@@ -815,8 +816,8 @@ jobs:
       # media type on the pull side.
       - uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
       - name: Publish OCI artifact
-        # oras carries its own login — docker/login-action shells out to a
-        # docker CLI the macOS runners do not have.
+        # oras and cosign carry their own logins — docker/login-action shells
+        # out to a docker CLI the macOS runners do not have.
         env:
           VERSION: ${{ needs.meta.outputs.version }}
           SHORT: ${{ inputs.plugin_short }}
@@ -826,17 +827,25 @@ jobs:
           set -euo pipefail
           printf '%s' "${{ github.token }}" | \
             oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-          ref="ghcr.io/${{ github.repository_owner }}/plugins/${SHORT}:${VERSION}-${POS}-${PARCH}"
+          printf '%s' "${{ github.token }}" | \
+            cosign login ghcr.io --username "${{ github.actor }}" --password-stdin
+          repo="ghcr.io/${{ github.repository_owner }}/plugins/${SHORT}"
+          ref="${repo}:${VERSION}-${POS}-${PARCH}"
           echo "pushing $ref"
           oras push "$ref" \
             --artifact-type "application/vnd.mcpg.plugin.v1" \
             --config plugin-artifact-config.json:application/vnd.mcpg.plugin.config.v1+json \
             "${ZIP}:application/vnd.mcpg.plugin.package.v1+zip"
+          # Signed by manifest digest, as the container images are: a verifier
+          # (`cosign verify`, the operator's `trust.cosignIdentity`) looks the
+          # signature up by digest, so every tag of this manifest shares it.
+          digest="$(oras manifest fetch --descriptor "$ref" | jq -r .digest)"
+          cosign sign --yes "${repo}@${digest}"
           # The floating `protocol-<major>-<os>-<arch>` tag lets a gateway pull
           # "the newest build that speaks protocol N for my platform" without
           # pinning a version, and it is the form our own documentation uses.
           # It is an `oras tag` of the manifest just pushed — same digest, so
-          # it inherits that tag's signatures and adds no second artefact.
+          # it inherits that tag's signature and adds no second artefact.
           proto="$(sed -n 's/^protocol_version:[[:space:]]*//p' plugin.yaml | head -1 | tr -d '"'"'"' ')"
           if [ -n "$proto" ]; then
             oras tag "$ref" "protocol-${proto%%.*}-${POS}-${PARCH}"
@@ -865,6 +874,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+        with:
+          cosign-release: 'v2.4.1'
       - name: Assemble multi-platform indexes
         env:
           VERSION: ${{ needs.meta.outputs.version }}
@@ -873,6 +885,8 @@ jobs:
           set -euo pipefail
           printf '%s' "${{ github.token }}" | \
             oras login ghcr.io --username "${{ github.actor }}" --password-stdin
+          printf '%s' "${{ github.token }}" | \
+            cosign login ghcr.io --username "${{ github.actor }}" --password-stdin
           repo="ghcr.io/${{ github.repository_owner }}/plugins/${SHORT}"
           proto="$(sed -n 's/^protocol_version:[[:space:]]*//p' plugin.yaml | head -1 | tr -d '"'"'"' ')"
           if [ -z "$proto" ]; then
@@ -925,6 +939,11 @@ jobs:
               | oras manifest push "${repo}:${out_tag}" \
                   --media-type application/vnd.oci.image.index.v1+json -
             echo "  pushed ${repo}:${out_tag} (${#members[@]} platform(s))"
+            # The index is what a digest-pinning consumer verifies, so it is
+            # signed like the per-platform manifests; the floating tag names
+            # the same digest and needs no signature of its own.
+            digest="$(oras manifest fetch --descriptor "${repo}:${out_tag}" | jq -r .digest)"
+            cosign sign --yes "${repo}@${digest}"
             oras tag "${repo}:${out_tag}" "${float_tag}"
             echo "  tagged ${repo}:${float_tag}"
           }
@@ -1043,12 +1062,17 @@ jobs:
           set -euo pipefail
           printf '%s' "${{ github.token }}" | \
             oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-          ref="ghcr.io/${{ github.repository_owner }}/plugins/${SHORT}:${VERSION}-wasi-wasm"
+          printf '%s' "${{ github.token }}" | \
+            cosign login ghcr.io --username "${{ github.actor }}" --password-stdin
+          repo="ghcr.io/${{ github.repository_owner }}/plugins/${SHORT}"
+          ref="${repo}:${VERSION}-wasi-wasm"
           echo "pushing $ref"
           oras push "$ref" \
             --artifact-type "application/vnd.mcpg.plugin.v1" \
             --config plugin-artifact-config.json:application/vnd.mcpg.plugin.config.v1+json \
             "${ZIP}:application/vnd.mcpg.plugin.package.v1+zip"
+          digest="$(oras manifest fetch --descriptor "$ref" | jq -r .digest)"
+          cosign sign --yes "${repo}@${digest}"
           proto="$(sed -n 's/^protocol_version:[[:space:]]*//p' plugin.yaml | head -1 | tr -d '"'"'"' ')"
           if [ -n "$proto" ]; then
             oras tag "$ref" "protocol-${proto%%.*}-wasi-wasm"
