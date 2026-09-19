@@ -15,10 +15,12 @@ here with its tier:
 | `plugin` | `mcpg-plugin-*` | lib flow + 6-lane cdylib zips (Ed25519-signed when the org key is set) with cosign bundles + provenance attestations |
 | `product` | `mcpg`, `mcpg-config`, `mcpg-plugin`, `mcpg-operator`, `mcpg-cloud` | lib flow + 6-lane binary tarballs (`{bin}-{version}-{triple}.tar.xz|.zip` + `.sha256` + `.sigstore.json` + attestation), SPDX SBOM + resolved lockfile, and — where the repo carries a Dockerfile — a multi-arch container image signed by digest |
 
-Lanes: `x86_64/aarch64-unknown-linux-gnu` (native runners),
-`x86_64/aarch64-unknown-linux-musl` (musl.cc cross, dynamic-linked so
-the gateway can `dlopen` plugins), `aarch64-apple-darwin` (native),
-`x86_64-pc-windows-gnu` (mingw cross).
+Lanes: `x86_64/aarch64-unknown-linux-gnu` (built inside
+`rust:1-bookworm` on hosted runners, and verified to require no symbol
+above glibc 2.36 — the floor Debian 12 / Ubuntu 22.04 / RHEL 9 hosts
+can load), `x86_64/aarch64-unknown-linux-musl` (musl.cc cross,
+dynamic-linked so the gateway can `dlopen` plugins),
+`aarch64-apple-darwin` (native), `x86_64-pc-windows-gnu` (mingw cross).
 
 Three org-variable gates phase the rollout: `OSS_CI_ENABLED` (unset ⇒
 every run skips instantly), `OSS_RELEASES_PUBLISH` (cut real GitHub

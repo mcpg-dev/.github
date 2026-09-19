@@ -349,8 +349,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: "${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}", triple: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
+          # linux-gnu links against the build host's glibc, and the hosted
+          # runner images are newer than the bookworm base the rest of the
+          # estate runs on. Hosted lanes build inside that base so the
+          # symbol floor holds by construction; lab-runners already are it.
+          # `cond && '' || x` always yields x (the empty string is falsy),
+          # so the non-empty value must sit on the truthy side.
+          - { os: "${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}", triple: x86_64-unknown-linux-gnu,
+              build_container: "${{ !github.event.repository.private && 'rust:1-bookworm' || '' }}" }
+          - { os: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, build_container: "rust:1-bookworm" }
           - { os: "${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}", triple: x86_64-unknown-linux-musl,  musl: x86_64,
               musl_sha256: c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea }
           # x86_64 host on purpose: the musl.cc cross toolchains are
@@ -444,12 +451,64 @@ jobs:
       - name: Build
         env:
           FEATURES: ${{ inputs.release_features }}
+          TRIPLE: ${{ matrix.triple }}
         run: |
           set -euo pipefail
           # --locked: build exactly the dependency set this release resolved and
           # publishes, so the attached lockfile describes these binaries.
-          cargo build --release --locked --bins --target ${{ matrix.triple }} \
-            ${FEATURES:+--features "$FEATURES"}
+          if [ -n "${{ matrix.build_container || '' }}" ]; then
+            # The sibling-fetch rule lives in the host's git config and is
+            # applied by the git CLI; a private product's dependency fetch
+            # needs both inside the container too.
+            gitcfg=()
+            [ -f "$HOME/.gitconfig" ] && gitcfg=(-v "$HOME/.gitconfig":/root/.gitconfig:ro)
+            docker run --rm -v "$PWD":/src -w /src -e FEATURES -e TRIPLE -e CARGO_NET_GIT_FETCH_WITH_CLI \
+              "${gitcfg[@]}" "${{ matrix.build_container }}" \
+              sh -c 'apt-get update -qq && apt-get install -y -qq protobuf-compiler libkrb5-dev pkg-config \
+                       cmake clang libclang-dev libxml2-dev libsasl2-dev libssl-dev zlib1g-dev \
+                     && cargo build --release --locked --bins --target "$TRIPLE" ${FEATURES:+--features "$FEATURES"}'
+            # The container runs as root, so on a cold cache it CREATES
+            # target/ root-owned and the host-side packing cannot stage
+            # from it. Hand the tree back to the runner user.
+            sudo chown -R "$(id -u):$(id -g)" target
+          else
+            cargo build --release --locked --bins --target "$TRIPLE" \
+              ${FEATURES:+--features "$FEATURES"}
+          fi
+      - name: Enforce the glibc floor
+        if: endsWith(matrix.triple, '-linux-gnu')
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          # Every linux-gnu binary must load on the bookworm-era hosts the
+          # estate targets; a floor above it is a build-host leak.
+          floor="2.36"
+          for bin in $(python3 -c "
+          import tomllib
+          m=tomllib.load(open('Cargo.toml','rb'))
+          bins=[b['name'] for b in m.get('bin',[])]
+          print(' '.join(bins) if bins else m['package']['name'])"); do
+            exe="target/${TRIPLE}/release/${bin}"
+            [ -f "$exe" ] || { echo "missing $exe"; exit 1; }
+            # A failed scan must not read as a clean one: an empty result
+            # would skip the comparison below and report the floor as met.
+            if ! syms="$(objdump -T "$exe")"; then
+              echo "::error::objdump could not read $exe — the glibc floor is unverifiable, which is not the same as met."
+              exit 1
+            fi
+            max="$(printf '%s\n' "$syms" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1 || true)"
+            max="${max#GLIBC_}"
+            if [ -z "$max" ]; then
+              echo "::error::$exe references no GLIBC_ symbol, which a glibc binary always does — the scan did not work."
+              exit 1
+            fi
+            if [ "$(printf '%s\n%s\n' "$max" "$floor" | sort -V | tail -1)" != "$floor" ]; then
+              echo "::error::$exe requires GLIBC_$max, above the $floor floor — it would not start on Debian 12 / Ubuntu 22.04 / RHEL 9 hosts."
+              exit 1
+            fi
+            echo "glibc floor ok: $bin requires $max <= $floor"
+          done
       - name: Pack + upload + sign + attest
         env:
           GH_TOKEN: ${{ github.token }}
