@@ -74,6 +74,20 @@ env:
   # System git for dependency fetches; sibling repositories are public, so
   # the fetches are anonymous.
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # `retry <attempts> <command…>`, for a step to `eval`. The release record
+  # and a pushed manifest are written by one request and read by the next,
+  # and both GitHub and GHCR answer such a read with "not found" for a few
+  # seconds. Only idempotent commands go through it.
+  RETRY_FN: |
+    retry() {
+      local attempts="$1" attempt; shift
+      for attempt in $(seq 1 "$attempts"); do
+        "$@" && return 0
+        [ "$attempt" -lt "$attempts" ] && sleep $(( attempt * 15 ))
+      done
+      echo "::error::gave up after ${attempts} attempts: $*" >&2
+      return 1
+    }
 
 jobs:
   # ── resolve name/version/tag once; decide gating ─────────────────────
@@ -545,11 +559,19 @@ jobs:
             (cd "$staged" && shasum -a 256 "$archive" > "${archive}.sha256")
             assets+=("${staged}/${archive}" "${staged}/${archive}.sha256")
           done
-          gh release upload "$TAG" "${assets[@]}" --clobber
+          eval "$RETRY_FN"
+          retry 5 gh release upload "$TAG" "${assets[@]}" --clobber
           echo "STAGED=$staged" >> "$GITHUB_ENV"
       # cosign v2.x pinned: shipped verifiers (operator sigstore-rs) read the
       # legacy bundle/tag formats; do not bump to v3.
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+      - id: cosign
+        continue-on-error: true
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+        with:
+          cosign-release: 'v2.4.1'
+      # The installer's download host drops a connection now and then; only the second attempt can fail the job.
+      - if: steps.cosign.outcome == 'failure'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
         with:
           cosign-release: 'v2.4.1'
       - name: Cosign bundles
@@ -558,10 +580,11 @@ jobs:
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
           set -euo pipefail
+          eval "$RETRY_FN"
           for f in "$STAGED"/*.tar.xz "$STAGED"/*.zip; do
             [ -e "$f" ] || continue
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
-            gh release upload "$TAG" "${f}.sigstore.json" --clobber
+            retry 5 gh release upload "$TAG" "${f}.sigstore.json" --clobber
           done
       # Attestations are unavailable on private repos under this org's plan —
       # persisting one fails the whole job. Cosign bundles above cover the
@@ -850,9 +873,17 @@ jobs:
             --version "$VERSION" --os "$POS" --arch "$PARCH" --output "$zip_name" \
             --emit-config plugin-artifact-config.json
           shasum -a 256 "$zip_name" > "${zip_name}.sha256"
-          gh release upload "$TAG" "$zip_name" "${zip_name}.sha256" --clobber
+          eval "$RETRY_FN"
+          retry 5 gh release upload "$TAG" "$zip_name" "${zip_name}.sha256" --clobber
           echo "ZIP=$zip_name" >> "$GITHUB_ENV"
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+      - id: cosign
+        continue-on-error: true
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+        with:
+          cosign-release: 'v2.4.1'
+      # The installer's download host drops a connection now and then; only the second attempt can fail the job.
+      - if: steps.cosign.outcome == 'failure'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
         with:
           cosign-release: 'v2.4.1'
       - name: Cosign bundle
@@ -860,8 +891,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
+          eval "$RETRY_FN"
           cosign sign-blob --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
-          gh release upload "$TAG" "${ZIP}.sigstore.json" --clobber
+          retry 5 gh release upload "$TAG" "${ZIP}.sigstore.json" --clobber
       # Attestations are unavailable on private repos under this org's plan —
       # persisting one fails the whole job. Cosign bundles above cover the
       # signature need either way; public repos still attest.
@@ -873,7 +905,12 @@ jobs:
       # platform suffix itself, so each leg publishes its own zip as an
       # OCI artifact at <version>-<os>-<arch>. One layer, located by
       # media type on the pull side.
-      - uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+      - id: oras
+        continue-on-error: true
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+      # The installer's download host answers 5xx now and then; only the second attempt can fail the job.
+      - if: steps.oras.outcome == 'failure'
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
       - name: Publish OCI artifact
         # oras and cosign carry their own logins — docker/login-action shells
         # out to a docker CLI the macOS runners do not have.
@@ -898,7 +935,8 @@ jobs:
           # Signed by manifest digest, as the container images are: a verifier
           # (`cosign verify`, the operator's `trust.cosignIdentity`) looks the
           # signature up by digest, so every tag of this manifest shares it.
-          digest="$(oras manifest fetch --descriptor "$ref" | jq -r .digest)"
+          eval "$RETRY_FN"
+          digest="$(retry 5 oras manifest fetch --descriptor "$ref" | jq -r .digest)"
           cosign sign --yes "${repo}@${digest}"
           # The floating `protocol-<major>-<os>-<arch>` tag lets a gateway pull
           # "the newest build that speaks protocol N for my platform" without
@@ -932,8 +970,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+      - id: oras
+        continue-on-error: true
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+      # The installer's download host answers 5xx now and then; only the second attempt can fail the job.
+      - if: steps.oras.outcome == 'failure'
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+      - id: cosign
+        continue-on-error: true
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+        with:
+          cosign-release: 'v2.4.1'
+      # The installer's download host drops a connection now and then; only the second attempt can fail the job.
+      - if: steps.cosign.outcome == 'failure'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
         with:
           cosign-release: 'v2.4.1'
       - name: Assemble multi-platform indexes
@@ -953,6 +1003,7 @@ jobs:
             exit 1
           fi
           major="${proto%%.*}"
+          eval "$RETRY_FN"
 
           # suffix -> "<oci-os> <oci-arch>"; musl maps to plain linux because the
           # musl index is distinguished by its TAG, not by a platform field.
@@ -1001,7 +1052,7 @@ jobs:
             # The index is what a digest-pinning consumer verifies, so it is
             # signed like the per-platform manifests; the floating tag names
             # the same digest and needs no signature of its own.
-            digest="$(oras manifest fetch --descriptor "${repo}:${out_tag}" | jq -r .digest)"
+            digest="$(retry 5 oras manifest fetch --descriptor "${repo}:${out_tag}" | jq -r .digest)"
             cosign sign --yes "${repo}@${digest}"
             oras tag "${repo}:${out_tag}" "${float_tag}"
             echo "  tagged ${repo}:${float_tag}"
@@ -1096,9 +1147,17 @@ jobs:
             --version "$VERSION" --os wasi --arch wasm --output "$zip_name" \
             --emit-config plugin-artifact-config.json
           shasum -a 256 "$zip_name" > "${zip_name}.sha256"
-          gh release upload "$TAG" "$zip_name" "${zip_name}.sha256" --clobber
+          eval "$RETRY_FN"
+          retry 5 gh release upload "$TAG" "$zip_name" "${zip_name}.sha256" --clobber
           echo "ZIP=$zip_name" >> "$GITHUB_ENV"
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+      - id: cosign
+        continue-on-error: true
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+        with:
+          cosign-release: 'v2.4.1'
+      # The installer's download host drops a connection now and then; only the second attempt can fail the job.
+      - if: steps.cosign.outcome == 'failure'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
         with:
           cosign-release: 'v2.4.1'
       - name: Cosign bundle
@@ -1106,13 +1165,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
+          eval "$RETRY_FN"
           cosign sign-blob --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
-          gh release upload "$TAG" "${ZIP}.sigstore.json" --clobber
+          retry 5 gh release upload "$TAG" "${ZIP}.sigstore.json" --clobber
       - if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
           subject-path: ${{ env.ZIP }}
-      - uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+      - id: oras
+        continue-on-error: true
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+      # The installer's download host answers 5xx now and then; only the second attempt can fail the job.
+      - if: steps.oras.outcome == 'failure'
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
       - name: Publish OCI artifact
         env:
           VERSION: ${{ needs.meta.outputs.version }}
@@ -1130,7 +1195,8 @@ jobs:
             --artifact-type "application/vnd.mcpg.plugin.v1" \
             --config plugin-artifact-config.json:application/vnd.mcpg.plugin.config.v1+json \
             "${ZIP}:application/vnd.mcpg.plugin.package.v1+zip"
-          digest="$(oras manifest fetch --descriptor "$ref" | jq -r .digest)"
+          eval "$RETRY_FN"
+          digest="$(retry 5 oras manifest fetch --descriptor "$ref" | jq -r .digest)"
           cosign sign --yes "${repo}@${digest}"
           proto="$(sed -n 's/^protocol_version:[[:space:]]*//p' plugin.yaml | head -1 | tr -d '"'"'"' ')"
           if [ -n "$proto" ]; then
@@ -1309,7 +1375,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+      - id: cosign
+        continue-on-error: true
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+        with:
+          cosign-release: 'v2.4.1'
+      # The installer's download host drops a connection now and then; only the second attempt can fail the job.
+      - if: steps.cosign.outcome == 'failure'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
         with:
           cosign-release: 'v2.4.1'
       - name: Merge per-arch images + sign by digest
@@ -1415,7 +1488,8 @@ jobs:
               echo "(cargo-public-api could not complete for this crate; treat the diff as unavailable, not empty.)" >> "$out"
             fi
           fi
-          gh release upload "$TAG" "$out" --clobber
+          eval "$RETRY_FN"
+          retry 5 gh release upload "$TAG" "$out" --clobber
 
   sbom:
     # Runs for every tier. A lib or plugin consumer has the same question a
@@ -1452,6 +1526,7 @@ jobs:
             https://raw.githubusercontent.com/anchore/syft/v1.18.0/install.sh \
             | sh -s -- -b /usr/local/bin v1.18.0
           syft scan "dir:." -o "spdx-json=${CRATE}-${VERSION}.spdx.json"
-          gh release upload "$TAG" \
+          eval "$RETRY_FN"
+          retry 5 gh release upload "$TAG" \
             "${CRATE}-${VERSION}-resolved.Cargo.lock" \
             "${CRATE}-${VERSION}.spdx.json" --clobber
