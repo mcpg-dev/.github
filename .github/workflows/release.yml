@@ -77,7 +77,10 @@ env:
   # `retry <attempts> <command…>`, for a step to `eval`. The release record
   # and a pushed manifest are written by one request and read by the next,
   # and both GitHub and GHCR answer such a read with "not found" for a few
-  # seconds. Only idempotent commands go through it.
+  # seconds; keyless signing reaches three Sigstore services and fails when
+  # one does not answer. Only commands that are safe to repeat go through it:
+  # `--clobber` uploads, reads, and signing, where a repeat adds at most a
+  # second transparency-log entry for the same artifact.
   RETRY_FN: |
     retry() {
       local attempts="$1" attempt; shift
@@ -583,7 +586,7 @@ jobs:
           eval "$RETRY_FN"
           for f in "$STAGED"/*.tar.xz "$STAGED"/*.zip; do
             [ -e "$f" ] || continue
-            cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
+            retry 3 cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
             retry 5 gh release upload "$TAG" "${f}.sigstore.json" --clobber
           done
       # Attestations are unavailable on private repos under this org's plan —
@@ -892,7 +895,7 @@ jobs:
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
           eval "$RETRY_FN"
-          cosign sign-blob --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
+          retry 3 cosign sign-blob --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
           retry 5 gh release upload "$TAG" "${ZIP}.sigstore.json" --clobber
       # Attestations are unavailable on private repos under this org's plan —
       # persisting one fails the whole job. Cosign bundles above cover the
@@ -937,7 +940,7 @@ jobs:
           # signature up by digest, so every tag of this manifest shares it.
           eval "$RETRY_FN"
           digest="$(retry 5 oras manifest fetch --descriptor "$ref" | jq -r .digest)"
-          cosign sign --yes "${repo}@${digest}"
+          retry 3 cosign sign --yes "${repo}@${digest}"
           # The floating `protocol-<major>-<os>-<arch>` tag lets a gateway pull
           # "the newest build that speaks protocol N for my platform" without
           # pinning a version, and it is the form our own documentation uses.
@@ -1053,7 +1056,7 @@ jobs:
             # signed like the per-platform manifests; the floating tag names
             # the same digest and needs no signature of its own.
             digest="$(retry 5 oras manifest fetch --descriptor "${repo}:${out_tag}" | jq -r .digest)"
-            cosign sign --yes "${repo}@${digest}"
+            retry 3 cosign sign --yes "${repo}@${digest}"
             oras tag "${repo}:${out_tag}" "${float_tag}"
             echo "  tagged ${repo}:${float_tag}"
           }
@@ -1166,7 +1169,7 @@ jobs:
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
           eval "$RETRY_FN"
-          cosign sign-blob --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
+          retry 3 cosign sign-blob --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
           retry 5 gh release upload "$TAG" "${ZIP}.sigstore.json" --clobber
       - if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
@@ -1197,7 +1200,7 @@ jobs:
             "${ZIP}:application/vnd.mcpg.plugin.package.v1+zip"
           eval "$RETRY_FN"
           digest="$(retry 5 oras manifest fetch --descriptor "$ref" | jq -r .digest)"
-          cosign sign --yes "${repo}@${digest}"
+          retry 3 cosign sign --yes "${repo}@${digest}"
           proto="$(sed -n 's/^protocol_version:[[:space:]]*//p' plugin.yaml | head -1 | tr -d '"'"'"' ')"
           if [ -n "$proto" ]; then
             oras tag "$ref" "protocol-${proto%%.*}-wasi-wasm"
@@ -1391,12 +1394,13 @@ jobs:
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
+          eval "$RETRY_FN"
           repo="ghcr.io/${{ github.repository_owner }}/${CRATE}"
           docker buildx imagetools create -t "${repo}:${VERSION}" \
             "${repo}@${{ needs.image-amd64.outputs.digest }}" \
             "${repo}@${{ needs.image-arm64.outputs.digest }}"
           digest=$(docker buildx imagetools inspect "${repo}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
-          cosign sign --yes "${repo}@${digest}"
+          retry 3 cosign sign --yes "${repo}@${digest}"
           # Variant images get the same merge+sign, per package name. The
           # per-arch jobs emit "name=digest" pairs; a name missing from
           # either arch is a hard error, not a single-arch index.
@@ -1414,7 +1418,7 @@ jobs:
             docker buildx imagetools create -t "${vrepo}:${VERSION}" \
               "${vrepo}@${da}" "${vrepo}@${dr}"
             vdigest=$(docker buildx imagetools inspect "${vrepo}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
-            cosign sign --yes "${vrepo}@${vdigest}"
+            retry 3 cosign sign --yes "${vrepo}@${vdigest}"
           done
 
   # ── SBOM + resolved-lock transparency (product tier) ─────────────────
