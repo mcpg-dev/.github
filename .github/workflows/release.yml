@@ -77,10 +77,12 @@ env:
   # `retry <attempts> <command…>`, for a step to `eval`. The release record
   # and a pushed manifest are written by one request and read by the next,
   # and both GitHub and GHCR answer such a read with "not found" for a few
-  # seconds; keyless signing reaches three Sigstore services and fails when
-  # one does not answer. Only commands that are safe to repeat go through it:
-  # `--clobber` uploads, reads, and signing, where a repeat adds at most a
-  # second transparency-log entry for the same artifact.
+  # seconds; a write to the record can come back as an empty answer; keyless
+  # signing reaches three Sigstore services and fails when one does not
+  # answer. Only commands that are safe to repeat go through it: `--clobber`
+  # uploads, reads, PATCHes that set the record's fields, and signing, where
+  # a repeat adds at most a second transparency-log entry for the same
+  # artifact.
   RETRY_FN: |
     retry() {
       local attempts="$1" attempt; shift
@@ -264,6 +266,7 @@ jobs:
           PRE: ${{ contains(needs.meta.outputs.version, '-') }}
         run: |
           set -euo pipefail
+          eval "$RETRY_FN"
           # Any-state lookup: a draft from an earlier attempt exists only in
           # the paginated list, never behind the by-tag endpoint. On an HTTP
           # error gh prints the raw response body to stdout with the jq
@@ -276,13 +279,15 @@ jobs:
             case "$id" in ''|*[!0-9]*) id="" ;; esac
           fi
           if [ -z "$id" ]; then
+            # One request, never retried: a repeat after a lost answer can
+            # cut a second draft for the same tag.
             id=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases" \
               -f tag_name="$TAG" -f name="$TAG" \
               -F draft=true -F prerelease="$PRE" \
               -F body=@"$RUNNER_TEMP/body.md" --jq .id)
             echo "created draft release ${TAG} (id ${id})"
           else
-            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${id}" \
+            retry 5 gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${id}" \
               -F body=@"$RUNNER_TEMP/body.md" > /dev/null
             echo "reusing release ${TAG} (id ${id}) — body refreshed"
           fi
@@ -307,7 +312,8 @@ jobs:
           LATEST: ${{ contains(needs.meta.outputs.version, '-') && 'false' || 'true' }}
         run: |
           set -euo pipefail
-          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${RID}" \
+          eval "$RETRY_FN"
+          retry 5 gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${RID}" \
             -F draft=false -f make_latest="$LATEST" --jq .html_url
 
   # ── one dependency set for the whole release ────────────────────────────────
