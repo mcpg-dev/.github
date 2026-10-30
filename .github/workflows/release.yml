@@ -391,7 +391,7 @@ jobs:
           # self-hosted lane (the M1 is repo-scoped to the monorepo), and
           # the gnu-arm lane compiles natively on arm hosts. Both consume
           # paid minutes for private repos; images never depend on them.
-          - { os: macos-14,        triple: aarch64-apple-darwin }
+          - { os: macos-15,        triple: aarch64-apple-darwin }
           - { os: "${{ github.event.repository.private && 'lab-runners' || 'ubuntu-latest' }}", triple: x86_64-pc-windows-gnu,      mingw: true }
     runs-on: ${{ matrix.os }}
     steps:
@@ -633,7 +633,7 @@ jobs:
                musl_sha256:"c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea"},
               {os:"ubuntu-latest",    triple:"aarch64-unknown-linux-musl", pos:"linux",   parch:"musl-arm64", musl:"aarch64",
                musl_sha256:"c909817856d6ceda86aa510894fa3527eac7989f0ef6e87b5721c58737a06c38"},
-              {os:"macos-14",         triple:"aarch64-apple-darwin",       pos:"darwin",  parch:"arm64"},
+              {os:"macos-15",         triple:"aarch64-apple-darwin",       pos:"darwin",  parch:"arm64"},
               {os:"ubuntu-latest",    triple:"x86_64-pc-windows-gnu",      pos:"windows", parch:"amd64", mingw:true}
             ]
             | map(select((.pos + "-" + .parch) as $lane | ($skip | split(",") | index($lane)) == null))
