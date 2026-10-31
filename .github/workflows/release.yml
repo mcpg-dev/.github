@@ -571,18 +571,19 @@ jobs:
           eval "$RETRY_FN"
           retry 5 gh release upload "$TAG" "${assets[@]}" --clobber
           echo "STAGED=$staged" >> "$GITHUB_ENV"
-      # cosign v2.x pinned: shipped verifiers (operator sigstore-rs) read the
-      # legacy bundle/tag formats; do not bump to v3.
+      # Every signing call passes --new-bundle-format=false --use-signing-config=false:
+      # shipped verifiers (operator sigstore-rs) read only the legacy bundle/tag formats.
+      # Installer v4.0.0: later releases run envsubst, which lab-runners lack.
       - id: cosign
         continue-on-error: true
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       # The installer's download host drops a connection now and then; only the second attempt can fail the job.
       - if: steps.cosign.outcome == 'failure'
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       - name: Cosign bundles
         env:
           GH_TOKEN: ${{ github.token }}
@@ -592,7 +593,7 @@ jobs:
           eval "$RETRY_FN"
           for f in "$STAGED"/*.tar.xz "$STAGED"/*.zip; do
             [ -e "$f" ] || continue
-            retry 3 cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
+            retry 3 cosign sign-blob --new-bundle-format=false --use-signing-config=false --yes --bundle "${f}.sigstore.json" "$f"
             retry 5 gh release upload "$TAG" "${f}.sigstore.json" --clobber
           done
       # Attestations are unavailable on private repos under this org's plan —
@@ -887,21 +888,21 @@ jobs:
           echo "ZIP=$zip_name" >> "$GITHUB_ENV"
       - id: cosign
         continue-on-error: true
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       # The installer's download host drops a connection now and then; only the second attempt can fail the job.
       - if: steps.cosign.outcome == 'failure'
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       - name: Cosign bundle
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
           eval "$RETRY_FN"
-          retry 3 cosign sign-blob --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
+          retry 3 cosign sign-blob --new-bundle-format=false --use-signing-config=false --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
           retry 5 gh release upload "$TAG" "${ZIP}.sigstore.json" --clobber
       # Attestations are unavailable on private repos under this org's plan —
       # persisting one fails the whole job. Cosign bundles above cover the
@@ -946,7 +947,7 @@ jobs:
           # signature up by digest, so every tag of this manifest shares it.
           eval "$RETRY_FN"
           digest="$(retry 5 oras manifest fetch --descriptor "$ref" | jq -r .digest)"
-          retry 3 cosign sign --yes "${repo}@${digest}"
+          retry 3 cosign sign --new-bundle-format=false --use-signing-config=false --yes "${repo}@${digest}"
           # The floating `protocol-<major>-<os>-<arch>` tag lets a gateway pull
           # "the newest build that speaks protocol N for my platform" without
           # pinning a version, and it is the form our own documentation uses.
@@ -987,14 +988,14 @@ jobs:
         uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
       - id: cosign
         continue-on-error: true
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       # The installer's download host drops a connection now and then; only the second attempt can fail the job.
       - if: steps.cosign.outcome == 'failure'
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       - name: Assemble multi-platform indexes
         env:
           VERSION: ${{ needs.meta.outputs.version }}
@@ -1062,7 +1063,7 @@ jobs:
             # signed like the per-platform manifests; the floating tag names
             # the same digest and needs no signature of its own.
             digest="$(retry 5 oras manifest fetch --descriptor "${repo}:${out_tag}" | jq -r .digest)"
-            retry 3 cosign sign --yes "${repo}@${digest}"
+            retry 3 cosign sign --new-bundle-format=false --use-signing-config=false --yes "${repo}@${digest}"
             oras tag "${repo}:${out_tag}" "${float_tag}"
             echo "  tagged ${repo}:${float_tag}"
           }
@@ -1161,21 +1162,21 @@ jobs:
           echo "ZIP=$zip_name" >> "$GITHUB_ENV"
       - id: cosign
         continue-on-error: true
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       # The installer's download host drops a connection now and then; only the second attempt can fail the job.
       - if: steps.cosign.outcome == 'failure'
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       - name: Cosign bundle
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
           eval "$RETRY_FN"
-          retry 3 cosign sign-blob --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
+          retry 3 cosign sign-blob --new-bundle-format=false --use-signing-config=false --yes --bundle "${ZIP}.sigstore.json" "$ZIP"
           retry 5 gh release upload "$TAG" "${ZIP}.sigstore.json" --clobber
       - if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
@@ -1206,7 +1207,7 @@ jobs:
             "${ZIP}:application/vnd.mcpg.plugin.package.v1+zip"
           eval "$RETRY_FN"
           digest="$(retry 5 oras manifest fetch --descriptor "$ref" | jq -r .digest)"
-          retry 3 cosign sign --yes "${repo}@${digest}"
+          retry 3 cosign sign --new-bundle-format=false --use-signing-config=false --yes "${repo}@${digest}"
           proto="$(sed -n 's/^protocol_version:[[:space:]]*//p' plugin.yaml | head -1 | tr -d '"'"'"' ')"
           if [ -n "$proto" ]; then
             oras tag "$ref" "protocol-${proto%%.*}-wasi-wasm"
@@ -1386,14 +1387,14 @@ jobs:
           password: ${{ github.token }}
       - id: cosign
         continue-on-error: true
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       # The installer's download host drops a connection now and then; only the second attempt can fail the job.
       - if: steps.cosign.outcome == 'failure'
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
         with:
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.1.4'
       - name: Merge per-arch images + sign by digest
         env:
           CRATE: ${{ needs.meta.outputs.crate }}
@@ -1406,7 +1407,7 @@ jobs:
             "${repo}@${{ needs.image-amd64.outputs.digest }}" \
             "${repo}@${{ needs.image-arm64.outputs.digest }}"
           digest=$(docker buildx imagetools inspect "${repo}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
-          retry 3 cosign sign --yes "${repo}@${digest}"
+          retry 3 cosign sign --new-bundle-format=false --use-signing-config=false --yes "${repo}@${digest}"
           # Variant images get the same merge+sign, per package name. The
           # per-arch jobs emit "name=digest" pairs; a name missing from
           # either arch is a hard error, not a single-arch index.
@@ -1424,7 +1425,7 @@ jobs:
             docker buildx imagetools create -t "${vrepo}:${VERSION}" \
               "${vrepo}@${da}" "${vrepo}@${dr}"
             vdigest=$(docker buildx imagetools inspect "${vrepo}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
-            retry 3 cosign sign --yes "${vrepo}@${vdigest}"
+            retry 3 cosign sign --new-bundle-format=false --use-signing-config=false --yes "${vrepo}@${vdigest}"
           done
 
   # ── SBOM + resolved-lock transparency (product tier) ─────────────────

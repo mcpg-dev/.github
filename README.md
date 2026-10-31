@@ -26,7 +26,7 @@ Three org-variable gates phase the rollout: `OSS_CI_ENABLED` (unset ⇒
 every run skips instantly), `OSS_RELEASES_PUBLISH` (cut real GitHub
 Releases vs verify-only), and `OSS_ARTIFACTS_PUBLISH`
 (binaries/zips/images ungate last, after key setup).
-Signing is keyless cosign (pinned v2.4.1 — shipped verifiers read the
-v2 formats) over GitHub OIDC; the only optional secret is
+Signing is keyless cosign (v3.1.4 in its legacy formats — shipped
+verifiers read only those) over GitHub OIDC; the only optional secret is
 `OSS_PLUGIN_SIGNING_KEY` (a dedicated OSS Ed25519 seed for in-zip
 plugin signatures).
