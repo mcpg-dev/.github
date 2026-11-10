@@ -156,7 +156,7 @@ jobs:
         if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          client-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
           private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
       - name: Dependency access (private sibling mirrors)
@@ -183,6 +183,17 @@ jobs:
         run: |
           sudo apt-get install -y -qq protobuf-compiler libkrb5-dev \
             || { sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler libkrb5-dev; }
+      # A crate with a Go part (a C archive its build.rs builds, such as the
+      # Tailscale node in mcpg-plugin-transport-tailscale) needs the Go
+      # toolchain its go.mod names.
+      - name: Go part of the crate
+        id: go
+        run: echo "mod=$(git ls-files '*go.mod' | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        if: steps.go.outputs.mod != ''
+        with:
+          go-version-file: ${{ steps.go.outputs.mod }}
+          cache: false
       - name: Build + test
         # --all-targets: dev-dependency features join the resolve, which some
         # libraries require by convention (k8s-openapi-style version features
@@ -336,7 +347,7 @@ jobs:
         if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          client-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
           private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
       - name: Dependency access (private sibling mirrors)
@@ -401,7 +412,7 @@ jobs:
         if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          client-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
           private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
       - name: Dependency access (private sibling mirrors)
@@ -663,7 +674,7 @@ jobs:
         if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          client-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
           private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
       - name: Dependency access (private sibling mirrors)
@@ -744,16 +755,30 @@ jobs:
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q mingw-w64 nasm cmake
           echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
+      # A crate with a Go part needs the Go toolchain its go.mod names; the
+      # build container gets the runner's copy mounted.
+      - name: Go part of the crate
+        id: go
+        run: echo "mod=$(git ls-files '*go.mod' | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        if: steps.go.outputs.mod != ''
+        with:
+          go-version-file: ${{ steps.go.outputs.mod }}
+          cache: false
       - name: Build cdylib
         run: |
           set -euo pipefail
+          go_mount=()
+          if command -v go >/dev/null 2>&1 && [ -n "${{ steps.go.outputs.mod }}" ]; then
+            go_mount=(-v "$(go env GOROOT)":/opt/go:ro -e GOTOOLCHAIN=local)
+          fi
           if [ -n "${{ matrix.build_container || '' }}" ]; then
             # linux-gnu links against the build host's glibc, and the runner
             # image is newer than the bookworm base every published gateway
             # image runs — a host build dlopen-fails there. Build inside the
             # SAME base so the symbol floor matches by construction.
-            docker run --rm -v "$PWD":/src -w /src "${{ matrix.build_container }}" \
-              sh -c "apt-get update -qq && apt-get install -y -qq protobuf-compiler libkrb5-dev pkg-config \
+            docker run --rm -v "$PWD":/src -w /src "${go_mount[@]}" "${{ matrix.build_container }}" \
+              sh -c "export PATH=/opt/go/bin:\$PATH; apt-get update -qq && apt-get install -y -qq protobuf-compiler libkrb5-dev pkg-config \
                        cmake clang libclang-dev libxml2-dev libsasl2-dev libssl-dev zlib1g-dev \
                      && cargo build --release --locked --lib --target ${{ matrix.triple }} --features cdylib-export"
             # The container runs as root, so on a cold cache it CREATES
@@ -1089,7 +1114,7 @@ jobs:
         if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          client-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
           private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
       - name: Dependency access (private sibling mirrors)
@@ -1249,7 +1274,7 @@ jobs:
         if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          client-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
           private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
       - id: push
@@ -1328,7 +1353,7 @@ jobs:
         if: vars.OPERATOR_GITHUB_APPLICATION_ID != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          app-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
+          client-id: ${{ vars.OPERATOR_GITHUB_APPLICATION_ID }}
           private-key: ${{ secrets.OPERATOR_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
       - id: push
@@ -1457,6 +1482,15 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
           key: public-api
+      # rustdoc runs build.rs, so a crate with a Go part needs Go here too.
+      - name: Go part of the crate
+        id: go
+        run: echo "mod=$(git ls-files '*go.mod' | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        if: steps.go.outputs.mod != ''
+        with:
+          go-version-file: ${{ steps.go.outputs.mod }}
+          cache: false
       - name: Resolve the previous release tag
         id: prev
         env:
